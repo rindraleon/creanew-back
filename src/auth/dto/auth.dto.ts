@@ -1,33 +1,48 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
-  IsEmail,
   IsOptional,
   IsString,
   Length,
   Matches,
+  MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsSafeEmail, NormalizeEmail } from '../../common/validators/email-disposable.validator';
 import { UserRole } from '../../common/enums';
 
 export class RegisterDto {
-  @ApiProperty({ example: 'Camille Moreau' })
+  @ApiProperty({
+    example: 'johndoe_92',
+    description: 'Nom d’utilisateur unique (3-30, lettres/chiffres/._-)',
+  })
   @IsString()
-  @Length(1, 120)
-  firstName!: string;
+  @Length(3, 30)
+  @Matches(/^[a-zA-Z0-9._-]+$/, {
+    message: 'Username invalide : lettres, chiffres, . _ - uniquement.',
+  })
+  username!: string;
+
+  @ApiPropertyOptional({ example: 'Camille' })
+  @IsOptional()
+  @IsString()
+  @Length(0, 120)
+  firstName?: string;
 
   @ApiProperty({ example: 'Rakoto' })
   @IsString()
   @Length(1, 120)
   lastName!: string;
 
-  @ApiProperty({ example: 'client@example.local' })
-  @IsEmail()
+  @ApiProperty({ example: 'client@creanew.mg' })
+  @NormalizeEmail()
+  @IsSafeEmail()
   email!: string;
 
   @ApiProperty({ example: 'Motdepasse1!', minLength: 8 })
   @IsString()
   @MinLength(8)
+  @MaxLength(128)
   @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
     message: 'Le mot de passe doit contenir au moins une lettre et un chiffre.',
   })
@@ -40,21 +55,34 @@ export class RegisterDto {
   phone?: string;
 
   @ApiPropertyOptional({
-    example: false,
-    description: 'Devenir vendeur (crée une demande PENDING).',
+    deprecated: true,
+    description: 'Champ historique facultatif, ignoré par le serveur.',
   })
-  @IsOptional()
   @IsBoolean()
-  asSeller?: boolean;
+  @IsOptional()
+  acceptsTerms?: boolean;
 }
 
 export class LoginDto {
-  @ApiProperty({ example: 'client@example.local' })
-  @IsEmail()
-  email!: string;
+  @ApiProperty({
+    example: 'johndoe_92 ou client@creanew.mg',
+    description: 'Email ou nom d’utilisateur',
+  })
+  @IsOptional()
+  @IsString()
+  @Length(1, 190)
+  identifier?: string;
+
+  @ApiPropertyOptional({ example: 'client@creanew.mg', description: 'Alias email (compatibilité)' })
+  @IsOptional()
+  @NormalizeEmail()
+  @IsString()
+  @Length(1, 190)
+  email?: string;
 
   @ApiProperty({ example: 'Motdepasse1!' })
   @IsString()
+  @Length(1, 128)
   password!: string;
 }
 
@@ -66,8 +94,9 @@ export class RefreshTokenDto {
 }
 
 export class ForgotPasswordDto {
-  @ApiProperty({ example: 'client@example.local' })
-  @IsEmail()
+  @ApiProperty({ example: 'client@creanew.mg' })
+  @NormalizeEmail()
+  @IsSafeEmail()
   email!: string;
 }
 
@@ -79,6 +108,7 @@ export class ResetPasswordDto {
   @ApiProperty({ example: 'NouveauMotdepasse1!', minLength: 8 })
   @IsString()
   @MinLength(8)
+  @MaxLength(128)
   @Matches(/^(?=.*[A-Za-z])(?=.*\d).+$/, {
     message: 'Le mot de passe doit contenir au moins une lettre et un chiffre.',
   })
@@ -87,11 +117,14 @@ export class ResetPasswordDto {
 
 export class AuthUserDto {
   @ApiProperty() id!: string;
+  @ApiProperty() username!: string;
   @ApiProperty() email!: string;
-  @ApiProperty() firstName!: string;
+  @ApiPropertyOptional() firstName!: string | null;
   @ApiProperty() lastName!: string;
   @ApiProperty() fullName!: string;
   @ApiPropertyOptional() phone!: string | null;
+  @ApiPropertyOptional() avatarUrl!: string | null;
+  @ApiPropertyOptional() provider!: string | null;
   @ApiProperty({ enum: UserRole }) role!: UserRole;
   @ApiPropertyOptional({ description: 'Statut vendeur si le compte est vendeur.' })
   sellerStatus!: string | null;

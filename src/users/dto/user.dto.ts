@@ -1,26 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Exclude, Expose } from 'class-transformer';
-import {
-  IsBoolean,
-  IsEmail,
-  IsOptional,
-  IsString,
-  Length,
-  Matches,
-  MinLength,
-} from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Length, Matches, MinLength } from 'class-validator';
+import { IsSafeEmail, NormalizeEmail } from '../../common/validators/email-disposable.validator';
 import { UserRole } from '../../common/enums';
 
-/** Réponse utilisateur : ne contient JAMAIS de mot de passe. */
 export class UserResponseDto {
   @ApiProperty({ example: '3f1b2c...' })
   id!: string;
 
-  @ApiProperty({ example: 'client@example.local' })
+  @ApiProperty({ example: 'johndoe' })
+  username!: string;
+
+  @ApiProperty({ example: 'client@creanew.mg' })
   email!: string;
 
-  @ApiProperty({ example: 'Camille' })
-  firstName!: string;
+  @ApiPropertyOptional({ example: 'Camille' })
+  firstName!: string | null;
 
   @ApiProperty({ example: 'Moreau' })
   lastName!: string;
@@ -37,6 +32,9 @@ export class UserResponseDto {
   @ApiPropertyOptional({ example: null })
   avatarUrl!: string | null;
 
+  @ApiPropertyOptional({ example: 'google' })
+  provider!: string | null;
+
   @ApiProperty({ example: true })
   isActive!: boolean;
 
@@ -45,10 +43,17 @@ export class UserResponseDto {
 }
 
 export class UpdateProfileDto {
+  @ApiPropertyOptional({ example: 'johndoe' })
+  @IsOptional()
+  @IsString()
+  @Length(3, 30)
+  @Matches(/^[a-zA-Z0-9._-]+$/)
+  username?: string;
+
   @ApiPropertyOptional({ example: 'Camille' })
   @IsOptional()
   @IsString()
-  @Length(1, 120)
+  @Length(0, 120)
   firstName?: string;
 
   @ApiPropertyOptional({ example: 'Moreau' })
@@ -64,10 +69,16 @@ export class UpdateProfileDto {
   @Matches(/^[+0-9 ().-]+$/, { message: 'Numéro de téléphone invalide.' })
   phone?: string;
 
-  @ApiPropertyOptional({ example: 'client@example.local' })
+  @ApiPropertyOptional({ example: 'client@creanew.mg' })
   @IsOptional()
-  @IsEmail()
+  @NormalizeEmail()
+  @IsSafeEmail()
   email?: string;
+
+  @ApiPropertyOptional({ example: null })
+  @IsOptional()
+  @IsString()
+  avatarUrl?: string | null;
 }
 
 export class ChangePasswordDto {
@@ -145,29 +156,33 @@ export class AddressResponseDto {
   @ApiProperty() isDefault!: boolean;
 }
 
-/** Utilitaire de mapping entity → DTO (jamais d'entity renvoyée brute). */
 export function toUserResponse(user: {
   id: string;
+  username: string;
   email: string;
-  firstName: string;
+  firstName: string | null;
   lastName: string;
   phone: string | null;
   role: UserRole;
   isActive: boolean;
   createdAt: Date;
+  avatarUrl?: string | null;
+  provider?: string | null;
   avatarObjectKey?: string | null;
 }): UserResponseDto {
   const dto = new UserResponseDto();
   dto.id = user.id;
+  dto.username = user.username;
   dto.email = user.email;
-  dto.firstName = user.firstName;
+  dto.firstName = user.firstName ?? null;
   dto.lastName = user.lastName;
-  dto.fullName = `${user.firstName} ${user.lastName}`.trim();
+  dto.fullName = `${user.firstName ?? ''} ${user.lastName}`.trim();
   dto.phone = user.phone ?? null;
   dto.role = user.role;
   dto.isActive = user.isActive;
   dto.createdAt = user.createdAt;
-  dto.avatarUrl = null;
+  dto.avatarUrl = user.avatarUrl ?? null;
+  dto.provider = user.provider ?? null;
   return dto;
 }
 

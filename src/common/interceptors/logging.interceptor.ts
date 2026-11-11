@@ -22,7 +22,7 @@ export class LoggingInterceptor implements NestInterceptor {
           JSON.stringify({
             requestId: request.id,
             method: request.method,
-            path: request.url,
+            path: request.path,
             status: response.statusCode,
             durationMs: duration,
             ip: request.ip,

@@ -1,14 +1,13 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
-import { BusinessException } from './common/errors/business.exception';
-import { ErrorCode } from './common/errors/error-codes';
+import { createAppValidationPipe } from './common/pipes/app-validation.pipe';
 import { StorageService } from './shared/storage/storage.service';
 import { DataSource } from 'typeorm';
 
@@ -22,10 +21,6 @@ async function bootstrap(): Promise<void> {
 
   /* ------------------------------- Sécurité -------------------------------- */
 
-  // CSP volontairement permissif sur `style-src`/`img-src` : l'UI Swagger
-  // charge ses propres assets et peut référencer des images distantes.
-  // `object-src 'none'`, `frame-ancestors 'self'` et `base-uri 'self'`
-  // restent en place : ce sont les protections qui comptent vraiment.
   app.use(
     helmet({
       contentSecurityPolicy: {
@@ -50,7 +45,7 @@ async function bootstrap(): Promise<void> {
   const origins = config.get<string[]>('security.corsOrigins') ?? ['http://localhost:5173'];
   app.enableCors({
     origin: (origin, callback) => {
-      // Autorise les outils sans origine (curl, tests e2e) et la liste .env.
+      // Autorise les clients sans origine (comme curl) et la liste .env.
       if (!origin || origins.includes(origin) || origins.includes('*')) {
         callback(null, true);
         return;
@@ -70,27 +65,7 @@ async function bootstrap(): Promise<void> {
 
   /* --------------------------- Validation globale --------------------------- */
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true, // supprime les propriétés non décorées
-      forbidNonWhitelisted: true, // 400 si propriété inconnue (anti mass-assignment)
-      transform: true,
-      transformOptions: { enableImplicitConversion: true },
-      forbidUnknownValues: true,
-      exceptionFactory: (errors) => {
-        const formatted = errors.reduce<Record<string, string[]>>((acc, error) => {
-          const key = error.property;
-          acc[key] = Object.values(error.constraints ?? {});
-          return acc;
-        }, {});
-        return BusinessException.unprocessable(
-          'Les données envoyées sont invalides.',
-          ErrorCode.VALIDATION_ERROR,
-          formatted,
-        );
-      },
-    }),
-  );
+  app.useGlobalPipes(createAppValidationPipe());
 
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new LoggingInterceptor());
@@ -129,10 +104,10 @@ async function bootstrap(): Promise<void> {
     }
 
     const swaggerConfig = new DocumentBuilder()
-      .setTitle('MOBILIER-SHOP API')
+      .setTitle('CreaNew API')
       .setDescription(
         [
-          'API REST de la marketplace multi-vendeurs **MOBILIER-SHOP**.',
+          'API REST de la marketplace multi-vendeurs **CreaNew**.',
           '',
           '## Authentification',
           "La plupart des endpoints exigent un JWT d'accès : cliquez sur **Authorize** et collez le token renvoyé par `POST /auth/login` (préfixe `Bearer` ajouté automatiquement).",
@@ -189,7 +164,7 @@ async function bootstrap(): Promise<void> {
         operationsSorter: 'method',
         docExpansion: 'none',
       },
-      customSiteTitle: 'MOBILIER-SHOP — Documentation API',
+      customSiteTitle: 'CreaNew — Documentation API',
     });
   }
 
@@ -208,7 +183,7 @@ async function bootstrap(): Promise<void> {
   console.log(
     [
       '',
-      `  MOBILIER-SHOP API      [${nodeEnv}]`,
+      `  CreaNew API      [${nodeEnv}]`,
       `  Écoute sur            http://localhost:${port}/${apiPrefix}`,
       `  Documentation         http://localhost:${port}/docs`,
       '',
@@ -228,11 +203,10 @@ async function warnIfSchemaMissing(app: INestApplication): Promise<void> {
       [
         '',
         '  ⚠  Le schéma de base de données est absent : aucune table créée.',
-        "     L'API démarrera mais toutes les requêtes échoueront en 500.",
+        "     Appliquez les migrations avant de démarrer l'API.",
         '',
         '     Corrigez-le avec :',
         '       npm run migration:run    (crée le schéma)',
-        '       npm run seed             (jeu de données de démonstration)',
         '',
         '     ou, en une seule commande :  npm run db:setup',
         '',

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES, type QueueName } from './queue.constants';
+import { validateEmail } from '../../common/validators/email-disposable.validator';
 
 @Injectable()
 export class QueueService {
@@ -31,7 +32,7 @@ export class QueueService {
     try {
       const queue = new Queue(name, {
         connection: this.connection(),
-        prefix: this.config.get<string>('queue.prefix') ?? 'mobilier',
+        prefix: this.config.get<string>('queue.prefix') ?? 'creanew',
         defaultJobOptions: {
           attempts: 3,
           backoff: { type: 'exponential', delay: 2000 },
@@ -81,7 +82,12 @@ export class QueueService {
     html: string;
     text?: string;
   }): Promise<boolean> {
-    return this.add(QUEUE_NAMES.EMAIL, 'send-mail', data);
+    const recipient = validateEmail(data.to);
+    if (!recipient.valid) {
+      this.logger.warn('Notification e-mail refusée par la politique de validation.');
+      return false;
+    }
+    return this.add(QUEUE_NAMES.EMAIL, 'send-mail', { ...data, to: recipient.normalized });
   }
 
   async closeAll(): Promise<void> {

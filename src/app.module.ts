@@ -32,6 +32,10 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { AdminModule } from './admin/admin.module';
 import { HealthModule } from './health/health.module';
 import { WishlistModule } from './wishlist/wishlist.module';
+import { CollectionsModule } from './collections/collections.module';
+import { ContactModule } from './contact/contact.module';
+import { MessagingModule } from './messaging/messaging.module';
+import { SiteContentModule } from './site-content/site-content.module';
 
 // Charge .env avant l'évaluation conditionnelle des modules ci-dessous.
 loadEnv();
@@ -49,7 +53,6 @@ const queueWorkers =
       load: [configuration],
       envFilePath: ['.env.local', '.env'],
       ignoreEnvFile: process.env.NODE_ENV === 'production',
-      // Fail fast : une configuration invalide empêche le démarrage.
       validationSchema,
       validationOptions: {
         abortEarly: false,
@@ -66,18 +69,20 @@ const queueWorkers =
 
     DatabaseModule,
 
-    // Infrastructures globales
     RedisModule,
     StorageModule,
     MailModule,
     QueueModule,
     AuditModule,
 
-    // Domaines métier
     AuthModule,
     UsersModule,
     SellersModule,
     CategoriesModule,
+    CollectionsModule,
+    ContactModule,
+    MessagingModule,
+    SiteContentModule,
     ProductsModule,
     CartModule,
     OrdersModule,
@@ -92,7 +97,6 @@ const queueWorkers =
     ...queueWorkers,
   ],
   providers: [
-    // Sécurité par défaut : JWT obligatoire, puis contrôle des rôles.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: SellerApprovedGuard },

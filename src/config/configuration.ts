@@ -15,7 +15,7 @@ const configuration = () => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: toNumber(process.env.PORT, 3000),
   apiPrefix: process.env.API_PREFIX ?? 'api',
-  appName: process.env.APP_NAME ?? 'MOBILIER-SHOP',
+  appName: process.env.APP_NAME ?? 'CreaNew',
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
 
   swagger: {
@@ -25,9 +25,10 @@ const configuration = () => ({
   },
 
   database: {
+    url: process.env.DATABASE_URL?.trim() ?? '',
     host: process.env.DATABASE_HOST ?? 'localhost',
     port: toNumber(process.env.DATABASE_PORT, 5432),
-    name: process.env.DATABASE_NAME ?? 'mobilier_shop',
+    name: process.env.DATABASE_NAME ?? 'creanew',
     user: process.env.DATABASE_USER ?? 'postgres',
     password: process.env.DATABASE_PASSWORD ?? 'postgres',
     ssl: toBoolean(process.env.DATABASE_SSL, false),
@@ -40,12 +41,12 @@ const configuration = () => ({
     accessTtl: process.env.JWT_ACCESS_TTL ?? '15m',
     refreshSecret: process.env.JWT_REFRESH_SECRET ?? 'dev-refresh-secret-change-me-please-32',
     refreshTtl: process.env.JWT_REFRESH_TTL ?? '30d',
-    refreshCookieName: process.env.JWT_REFRESH_COOKIE_NAME ?? 'mobilier_rt',
+    refreshCookieName: process.env.JWT_REFRESH_COOKIE_NAME ?? 'creanew_rt',
   },
 
   security: {
     throttlerTtl: toNumber(process.env.THROTTLE_TTL, 60),
-    throttlerLimit: toNumber(process.env.THROTTLE_LIMIT, 30),
+    throttlerLimit: toNumber(process.env.THROTTLE_LIMIT, 300),
     corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:5173')
       .split(',')
       .map((o) => o.trim())
@@ -66,7 +67,7 @@ const configuration = () => ({
 
   queue: {
     enabled: toBoolean(process.env.QUEUE_ENABLED, false),
-    prefix: process.env.QUEUE_PREFIX ?? 'mobilier',
+    prefix: process.env.QUEUE_PREFIX ?? 'creanew',
   },
 
   storage: {
@@ -95,7 +96,7 @@ const configuration = () => ({
     secure: toBoolean(process.env.SMTP_SECURE, false),
     user: process.env.SMTP_USER ?? '',
     password: process.env.SMTP_PASSWORD ?? '',
-    from: process.env.MAIL_FROM ?? 'MOBILIER-SHOP <no-reply@mobilier-shop.local>',
+    from: process.env.MAIL_FROM ?? '',
   },
 
   commerce: {

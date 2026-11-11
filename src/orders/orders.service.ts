@@ -23,6 +23,7 @@ import { CartService } from '../cart/cart.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { IdempotencyService } from '../common/services/idempotency.service';
 import { generateOrderNumber } from '../common/utils/slug.util';
+import { assertValidEmail } from '../common/validators/email-disposable.validator';
 import { ConfigService } from '@nestjs/config';
 import type { CancelOrderDto, CreateOrderDto, OrderQueryDto } from './dto/order.dto';
 import { buildMeta, type Paginated } from '../common/interfaces/paginated.interface';
@@ -109,18 +110,27 @@ export class OrdersService {
     const userRepo = this.dataSource.getRepository('users');
     const user = (await userRepo.findOne({
       where: { id: userId },
-      select: { id: true, email: true, firstName: true, lastName: true, phone: true },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        username: true,
+        phone: true,
+      },
     })) as {
       id: string;
       email: string;
-      firstName: string;
+      firstName: string | null;
       lastName: string;
+      username: string;
       phone: string | null;
     } | null;
     if (!user) {
       throw BusinessException.notFound('Utilisateur introuvable.', ErrorCode.NOT_FOUND);
     }
 
+    assertValidEmail(user.email);
     const shippingAddress = await this.resolveAddress(userId, dto);
     const requested = await this.resolveItems(userId, dto);
 
@@ -193,7 +203,11 @@ export class OrdersService {
         total,
         currency: this.config.get<string>('commerce.currency') ?? 'MGA',
         shippingAddress: shippingAddress,
-        customerName: shippingAddress.fullName || `${user.firstName} ${user.lastName}`.trim(),
+        customerName:
+          shippingAddress.fullName ||
+          `${user.firstName ?? ''} ${user.lastName}`.trim() ||
+          user.username ||
+          user.email,
         customerEmail: user.email,
         customerPhone: shippingAddress.phone || user.phone,
         notes: dto.notes ?? null,

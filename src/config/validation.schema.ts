@@ -4,16 +4,25 @@ export const validationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
   PORT: Joi.number().integer().min(1).max(65535).default(3000),
   API_PREFIX: Joi.string().allow('').default('api'),
-  APP_NAME: Joi.string().default('MOBILIER-SHOP'),
+  APP_NAME: Joi.string().default('CreaNew'),
   FRONTEND_URL: Joi.string().uri({ allowRelative: false }).default('http://localhost:5173'),
+  INITIAL_ADMIN_EMAIL: Joi.string().allow('').default(''),
+  INITIAL_ADMIN_USERNAME: Joi.string().allow('').default(''),
+  INITIAL_ADMIN_PASSWORD: Joi.string().allow('').default(''),
+  INITIAL_ADMIN_FIRST_NAME: Joi.string().allow('').default(''),
+  INITIAL_ADMIN_LAST_NAME: Joi.string().allow('').default(''),
 
   SWAGGER_ENABLED: Joi.boolean().default(true),
   SWAGGER_USER: Joi.string().allow('').default(''),
   SWAGGER_PASSWORD: Joi.string().allow('').default(''),
 
+  DATABASE_URL: Joi.string()
+    .uri({ scheme: ['postgres', 'postgresql'] })
+    .allow('')
+    .default(''),
   DATABASE_HOST: Joi.string().default('localhost'),
   DATABASE_PORT: Joi.number().integer().default(5432),
-  DATABASE_NAME: Joi.string().default('mobilier_shop'),
+  DATABASE_NAME: Joi.string().default('creanew'),
   DATABASE_USER: Joi.string().default('postgres'),
   DATABASE_PASSWORD: Joi.string().allow('').default('postgres'),
   DATABASE_SSL: Joi.boolean().default(false),
@@ -25,7 +34,7 @@ export const validationSchema = Joi.object({
   JWT_ACCESS_TTL: Joi.string().default('15m'),
   JWT_REFRESH_SECRET: Joi.string().default('dev-refresh-secret-change-me-please-32'),
   JWT_REFRESH_TTL: Joi.string().default('30d'),
-  JWT_REFRESH_COOKIE_NAME: Joi.string().default('mobilier_rt'),
+  JWT_REFRESH_COOKIE_NAME: Joi.string().default('creanew_rt'),
 
   THROTTLE_TTL: Joi.number().integer().default(60),
   THROTTLE_LIMIT: Joi.number().integer().default(30),
@@ -40,7 +49,7 @@ export const validationSchema = Joi.object({
   REDIS_DB: Joi.number().integer().default(0),
 
   QUEUE_ENABLED: Joi.boolean().default(false),
-  QUEUE_PREFIX: Joi.string().default('mobilier'),
+  QUEUE_PREFIX: Joi.string().default('creanew'),
 
   MINIO_ENDPOINT: Joi.string().default('localhost'),
   MINIO_PORT: Joi.number().integer().default(9000),
@@ -64,13 +73,30 @@ export const validationSchema = Joi.object({
   SMTP_SECURE: Joi.boolean().default(false),
   SMTP_USER: Joi.string().allow('').default(''),
   SMTP_PASSWORD: Joi.string().allow('').default(''),
-  MAIL_FROM: Joi.string().default('MOBILIER-SHOP <no-reply@mobilier-shop.local>'),
+  MAIL_FROM: Joi.string().allow('').default(''),
 
   DEFAULT_CURRENCY: Joi.string().default('MGA'),
   DEFAULT_LOW_STOCK_THRESHOLD: Joi.number().integer().min(0).default(5),
   SHIPPING_STANDARD_COST: Joi.number().integer().min(0).default(10000),
   SHIPPING_EXPRESS_COST: Joi.number().integer().min(0).default(25000),
   FREE_SHIPPING_THRESHOLD: Joi.number().integer().min(0).default(1500000),
+
+  OAUTH_GOOGLE_ENABLED: Joi.boolean().default(false),
+  OAUTH_FACEBOOK_ENABLED: Joi.boolean().default(false),
+  GOOGLE_CLIENT_ID: Joi.string().allow('').default(''),
+  GOOGLE_CLIENT_SECRET: Joi.string().allow('').default(''),
+  FACEBOOK_APP_ID: Joi.string().allow('').default(''),
+  FACEBOOK_APP_SECRET: Joi.string().allow('').default(''),
+  APPLE_CLIENT_ID: Joi.string().allow('').default(''),
+  APPLE_TEAM_ID: Joi.string().allow('').default(''),
+  APPLE_KEY_ID: Joi.string().allow('').default(''),
+  GITHUB_CLIENT_ID: Joi.string().allow('').default(''),
+  GITHUB_CLIENT_SECRET: Joi.string().allow('').default(''),
+  TIKTOK_CLIENT_KEY: Joi.string().allow('').default(''),
+  TIKTOK_CLIENT_SECRET: Joi.string().allow('').default(''),
+  LINKEDIN_CLIENT_ID: Joi.string().allow('').default(''),
+  LINKEDIN_CLIENT_SECRET: Joi.string().allow('').default(''),
+  APP_URL: Joi.string().uri({ allowRelative: false }).default('http://localhost:3000'),
 }).unknown(true);
 
 export function assertProductionSecrets(env: NodeJS.ProcessEnv): void {
@@ -94,7 +120,27 @@ export function assertProductionSecrets(env: NodeJS.ProcessEnv): void {
   if (env.JWT_ACCESS_SECRET && env.JWT_ACCESS_SECRET === env.JWT_REFRESH_SECRET) {
     problems.push('JWT_ACCESS_SECRET et JWT_REFRESH_SECRET doivent être différents.');
   }
-  if (!env.DATABASE_PASSWORD) problems.push('DATABASE_PASSWORD est obligatoire.');
+  const databaseUrl = env.DATABASE_URL?.trim();
+  if (databaseUrl) {
+    try {
+      const parsed = new URL(databaseUrl);
+      if (
+        !['postgres:', 'postgresql:'].includes(parsed.protocol) ||
+        !parsed.hostname ||
+        !parsed.username ||
+        !parsed.password ||
+        !parsed.pathname ||
+        parsed.pathname === '/'
+      )
+        throw new Error('invalid');
+    } catch {
+      problems.push(
+        'DATABASE_URL doit être une URL PostgreSQL avec utilisateur, mot de passe et base.',
+      );
+    }
+  } else if (!env.DATABASE_PASSWORD) {
+    problems.push('DATABASE_URL ou DATABASE_PASSWORD est obligatoire.');
+  }
 
   if (problems.length > 0) {
     throw new Error(`Configuration de production invalide :\n - ${problems.join('\n - ')}`);

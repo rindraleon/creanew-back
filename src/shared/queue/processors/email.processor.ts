@@ -14,13 +14,14 @@ export class EmailProcessor extends WorkerHost implements OnModuleDestroy {
   }
 
   async process(job: Job<EmailJobData>): Promise<void> {
-    await this.mailService.send({
+    const sent = await this.mailService.send({
       to: job.data.to,
       subject: job.data.subject,
       html: job.data.html,
       ...(job.data.text ? { text: job.data.text } : {}),
     });
-    this.logger.debug(`E-mail traité (job ${job.id}) → ${job.data.to}`);
+    if (!sent) throw new Error('Envoi e-mail non effectué.');
+    this.logger.debug(`E-mail traité (job ${job.id}).`);
   }
 
   async onModuleDestroy(): Promise<void> {

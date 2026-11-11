@@ -47,9 +47,6 @@ export class ProductsService {
       qb.andWhere('product."seller_id" = :ownerId', { ownerId: options.ownerId });
       if (query.status) qb.andWhere('product.status = :status', { status: query.status });
     } else if (options.allStatuses) {
-      // Espace admin : modération de tout le catalogue, brouillons compris.
-      // Sans cette porte, `GET /admin/products` renvoyait exactement la même
-      // chose que le catalogue public et les filtres de statut étaient inopérants.
       if (query.status) qb.andWhere('product.status = :status', { status: query.status });
     } else {
       // Catalogue public : uniquement les produits publiés et non supprimés.

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import type { Transporter } from 'nodemailer';
+import { validateEmail } from '../../common/validators/email-disposable.validator';
 
 export interface MailMessage {
   to: string;
@@ -21,12 +22,22 @@ export class MailService {
     return this.config.get<boolean>('mail.enabled') ?? false;
   }
 
+  get senderValid(): boolean {
+    const from = this.config.get<string>('mail.from') ?? '';
+    if (/[\r\n]/.test(from)) return false;
+    const display = from.match(/^[^<>]*<([^<>]+)>$/);
+    return validateEmail(display ? display[1] : from).valid;
+  }
+
   private getTransporter(): Transporter {
     if (this.transporter) return this.transporter;
     this.transporter = nodemailer.createTransport({
       host: this.config.get<string>('mail.host') ?? 'localhost',
       port: this.config.get<number>('mail.port') ?? 1025,
       secure: this.config.get<boolean>('mail.secure') ?? false,
+      connectionTimeout: 10000,
+      greetingTimeout: 5000,
+      socketTimeout: 15000,
       auth: this.config.get<string>('mail.user')
         ? {
             user: this.config.get<string>('mail.user'),
@@ -38,26 +49,35 @@ export class MailService {
   }
 
   async send(message: MailMessage): Promise<boolean> {
-    const from = this.config.get<string>('mail.from') ?? 'no-reply@mobilier-shop.local';
+    const recipient = validateEmail(message.to);
+    if (!recipient.valid) {
+      this.logger.warn('Envoi e-mail refusé par la politique de validation.');
+      return false;
+    }
+    const from = this.config.get<string>('mail.from') ?? '';
+    if (!this.senderValid) {
+      this.logger.warn('Expéditeur e-mail refusé par la politique de validation.');
+      return false;
+    }
 
     if (!this.enabled) {
-      this.logger.log(`[mail:disabled] → ${message.to} | ${message.subject}`);
+      this.logger.log('Envoi e-mail désactivé.');
       return false;
     }
 
     try {
       await this.getTransporter().sendMail({
         from,
-        to: message.to,
+        to: recipient.normalized,
         subject: message.subject,
         html: message.html,
         text: message.text ?? stripHtml(message.html),
       });
-      this.logger.log(`E-mail envoyé → ${message.to} | ${message.subject}`);
+      this.logger.log('E-mail envoyé.');
       return true;
-    } catch (error) {
+    } catch {
       // Un échec d'e-mail ne doit jamais faire échouer la requête métier.
-      this.logger.error(`Échec envoi e-mail → ${message.to} : ${(error as Error).message}`);
+      this.logger.error('Échec envoi e-mail SMTP.');
       return false;
     }
   }

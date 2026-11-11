@@ -24,7 +24,7 @@ import { MailModule } from '../mail/mail.module';
           password: config.get<string>('redis.password') || undefined,
           db: config.get<number>('redis.db') ?? 0,
         },
-        prefix: config.get<string>('queue.prefix') ?? 'mobilier',
+        prefix: config.get<string>('queue.prefix') ?? 'creanew',
       }),
     }),
     BullModule.registerQueue(

@@ -1,0 +1,115 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.workflow }}-${{ github.ref }}
+  # Ne jamais interrompre une migration ou un déploiement en cours.
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Qualité, migration et build backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: creanew_ci
+          POSTGRES_USER: creanew_ci
+          POSTGRES_PASSWORD: ephemeral_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U creanew_ci -d creanew_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://creanew_ci:ephemeral_ci_password@127.0.0.1:5432/creanew_ci
+      QUEUE_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Installer les dépendances verrouillées
+        run: npm ci
+      - name: Vérifier le format
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: Types
+        run: npm run typecheck
+      - name: Appliquer les migrations à une base CI isolée
+        run: npm run migration:run
+      - name: Vérifier l'absence de données automatiques
+        run: |
+          node -e 'const { Client } = require("pg"); (async () => { const db = new Client({ connectionString: process.env.DATABASE_URL }); await db.connect(); try { const r = await db.query("SELECT (SELECT count(*)::int FROM users) AS users, (SELECT count(*)::int FROM site_settings) AS settings"); if (r.rows[0].users !== 0 || r.rows[0].settings !== 0) throw new Error("Des données automatiques ont été créées."); } finally { await db.end(); } })().catch((e) => { console.error(e.message); process.exitCode = 1; });'
+      - name: Audit des dépendances (seuil élevé)
+        run: npm audit --audit-level=high
+      - name: Compiler le backend
+        run: npm run build
+      - name: Conserver l'artefact lié au commit
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: creanew-backend-${{ github.sha }}
+          path: |
+            dist/
+            package.json
+            package-lock.json
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    name: Déploiement Render et smoke tests backend
+    needs: quality
+    if: >-
+      ${{ github.event_name == 'push' && vars.RENDER_DEPLOY_ENABLED == 'true' &&
+          (github.ref == 'refs/heads/master' ||
+          (startsWith(github.ref, 'refs/tags/v') && vars.RENDER_RELEASE_DEPLOY_ENABLED == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: production
+    concurrency:
+      group: backend-render-production
+      cancel-in-progress: false
+    env:
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+      RENDER_SERVICE_KIND: backend
+      GH_TOKEN: ${{ github.token }}
+      BACKEND_URL: ${{ vars.BACKEND_URL }}
+      API_PREFIX: ${{ vars.API_PREFIX || 'api' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Bloquer le déploiement sans suite de tests
+        run: |
+          echo "::error::Le déploiement est bloqué : une suite de tests doit être rétablie et exécutée dans la CI avant la production."
+          exit 1
+      - name: Identifier le commit réellement vérifié
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Vérifier Render et déployer le commit exact
+        env:
+          RENDER_COMMIT_SHA: ${{ steps.commit.outputs.sha }}
+        run: node .github/deploy/render-deploy.mjs
+      - name: Smoke tests HTTPS non destructifs
+        run: node .github/deploy/smoke-deployment.mjs

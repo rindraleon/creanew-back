@@ -85,7 +85,11 @@ export class SellersService {
     });
 
     // Notification au demandeur + aux administrateurs.
-    await this.notifications.notifySellerPending(userId, user.email, user.firstName);
+    await this.notifications.notifySellerPending(
+      userId,
+      user.email,
+      user.firstName ?? user.username,
+    );
     const admins = await this.notifications.adminIds();
     await this.notifications.notifySellerApplicationReceived(admins, saved.shopName, user.email);
 
@@ -191,7 +195,11 @@ export class SellersService {
     });
 
     const user = await this.usersService.findById(seller.userId);
-    await this.notifications.notifySellerApproved(seller.userId, user.email, user.firstName);
+    await this.notifications.notifySellerApproved(
+      seller.userId,
+      user.email,
+      user.firstName ?? user.username,
+    );
     return saved;
   }
 
@@ -216,7 +224,7 @@ export class SellersService {
     await this.notifications.notifySellerRejected(
       seller.userId,
       user.email,
-      user.firstName,
+      user.firstName ?? user.username,
       reason,
     );
     return saved;

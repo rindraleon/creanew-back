@@ -31,13 +31,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // multer dans une exception dont le message reste anglais.
     const uploadError = this.translateUploadError(exception);
     if (uploadError) {
-      this.logger.warn(`${request.method} ${request.url} → 413 [${uploadError.code}]`);
+      this.logger.warn(`${request.method} ${request.path} → 413 [${uploadError.code}]`);
       response.status(HttpStatus.PAYLOAD_TOO_LARGE).json({
         statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
         message: uploadError.message,
         code: uploadError.code,
         timestamp: new Date().toISOString(),
-        path: request.url,
+        path: request.path,
         ...(request.id ? { requestId: request.id } : {}),
       } satisfies ApiErrorResponse);
       return;
@@ -47,13 +47,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // (requête brute, filtre, ordre de tri…) doit ressortir en 400, pas en 500.
     const uuidError = this.translateUuidError(exception);
     if (uuidError) {
-      this.logger.warn(`${request.method} ${request.url} → 400 [${uuidError.code}]`);
+      this.logger.warn(`${request.method} ${request.path} → 400 [${uuidError.code}]`);
       response.status(HttpStatus.BAD_REQUEST).json({
         statusCode: HttpStatus.BAD_REQUEST,
         message: uuidError.message,
         code: uuidError.code,
         timestamp: new Date().toISOString(),
-        path: request.url,
+        path: request.path,
         ...(request.id ? { requestId: request.id } : {}),
       } satisfies ApiErrorResponse);
       return;
@@ -83,7 +83,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // Les erreurs 500 ne doivent jamais exposer le message interne.
     if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       this.logger.error(
-        `${request.method} ${request.url} → ${status}`,
+        `${request.method} ${request.path} → ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
       if (process.env.NODE_ENV === 'production') {
@@ -91,7 +91,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     } else {
       this.logger.warn(
-        `${request.method} ${request.url} → ${status} [${code}] ${
+        `${request.method} ${request.path} → ${status} [${code}] ${
           Array.isArray(message) ? message.join(' | ') : message
         }`,
       );
@@ -103,7 +103,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       code,
       ...(errors ? { errors } : {}),
       timestamp: new Date().toISOString(),
-      path: request.url,
+      path: request.path,
       ...(request.id ? { requestId: request.id } : {}),
     };
 
@@ -136,10 +136,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return null;
   }
 
-  /**
-   * Erreur PostgreSQL « valeur invalide pour un UUID » (code 22P02).
-   * Se produit quand un identifiant trafiqué atteint une colonne uuid.
-   */
   private translateUuidError(exception: unknown): { message: string; code: ErrorCode } | null {
     const driverError = (exception as { code?: unknown; driverError?: { code?: unknown } } | null)
       ?.driverError;

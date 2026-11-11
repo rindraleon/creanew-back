@@ -4,6 +4,8 @@ import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../common/interfaces/authenticated-request.interface';
 import { AuthService } from './auth.service';
+import { OAuthService } from './oauth.service';
+import { ConfigService } from '@nestjs/config';
 import { Public } from '../common/decorators/public.decorator';
 import { CurrentUser, type JwtUser } from '../common/decorators/current-user.decorator';
 import {
@@ -20,26 +22,23 @@ import {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly oauth: OAuthService,
+    private readonly config: ConfigService,
+  ) {}
 
   @Public()
   @Post('register')
   @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @ApiOperation({
-    summary: 'Créer un compte',
-    description:
-      'Crée un compte client. Avec `asSeller: true`, crée également une demande vendeur en attente de validation (PENDING).',
-  })
-  @ApiResponse({ status: 201, type: AuthResponseDto, description: 'Compte créé.' })
-  @ApiResponse({ status: 409, description: 'Email déjà utilisé.' })
+  @ApiOperation({ summary: 'Créer un compte client' })
+  @ApiResponse({ status: 201, type: MessageResponseDto })
   async register(
     @Body() dto: RegisterDto,
     @Req() request: AuthenticatedRequest,
-    @Res({ passthrough: true }) response: Response,
-  ): Promise<AuthResponseDto> {
-    const result = await this.authService.register(dto, request);
-    this.authService.setRefreshCookie(response, result.refreshToken);
-    return result;
+  ): Promise<MessageResponseDto> {
+    await this.authService.register(dto, request);
+    return { message: 'Compte créé. Vous pouvez vous connecter.' };
   }
 
   @Public()
@@ -76,18 +75,14 @@ export class AuthController {
     @Req() request: AuthenticatedRequest,
     @Res({ passthrough: true }) response: Response,
   ): Promise<AuthResponseDto | void> {
-    const token = dto.refreshToken ?? (request.cookies?.['mobilier_rt'] as string | undefined);
-
-    // Visiteur anonyme : le frontend tente de restaurer une session à chaque
-    // chargement. Répondre 401 dans ce cas polluait la console de tous les
-    // visiteurs non connectés. « Aucune session à renouveler » n'est pas une
-    // erreur d'authentification : on renvoie 204 sans lever d'exception.
-    // Un jeton présent mais invalide, expiré ou révoqué renvoie toujours 401.
+    const token =
+      dto.refreshToken ??
+      (request.cookies?.[this.config.get<string>('jwt.refreshCookieName') ?? 'creanew_rt'] as
+        string | undefined);
     if (!token) {
       response.status(HttpStatus.NO_CONTENT);
       return;
     }
-
     const result = await this.authService.refresh(token, request);
     this.authService.setRefreshCookie(response, result.refreshToken);
     return result;
@@ -103,7 +98,10 @@ export class AuthController {
     @Req() request: AuthenticatedRequest,
     @Res({ passthrough: true }) response: Response,
   ): Promise<MessageResponseDto> {
-    const token = dto.refreshToken ?? (request.cookies?.['mobilier_rt'] as string | undefined);
+    const token =
+      dto.refreshToken ??
+      (request.cookies?.[this.config.get<string>('jwt.refreshCookieName') ?? 'creanew_rt'] as
+        string | undefined);
     await this.authService.logout(token, request);
     this.authService.clearRefreshCookie(response);
     return { message: 'Déconnexion réussie.' };
@@ -120,6 +118,7 @@ export class AuthController {
 
   @Public()
   @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 3, ttl: 300000 } })
   @ApiOperation({
     summary: 'Demander un lien de réinitialisation',
@@ -132,12 +131,14 @@ export class AuthController {
   ): Promise<MessageResponseDto> {
     await this.authService.forgotPassword(dto.email, request);
     return {
-      message: 'Si un compte existe pour cet e-mail, un lien de réinitialisation a été envoyé.',
+      message:
+        'Si un compte existe et que l’envoi est disponible, un lien de réinitialisation sera envoyé.',
     };
   }
 
   @Public()
   @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
   @Throttle({ default: { limit: 5, ttl: 300000 } })
   @ApiOperation({ summary: 'Réinitialiser le mot de passe avec le jeton reçu par e-mail' })
   @ApiResponse({ status: 200, type: MessageResponseDto })
@@ -147,5 +148,41 @@ export class AuthController {
   ): Promise<MessageResponseDto> {
     await this.authService.resetPassword(dto.token, dto.password, request);
     return { message: 'Mot de passe réinitialisé. Vous pouvez vous connecter.' };
+  }
+
+  @Public()
+  @Get('oauth/providers')
+  @ApiOperation({ summary: 'Fournisseurs sociaux activés et configurés' })
+  oauthProviders() {
+    return this.oauth.providers();
+  }
+
+  @Public()
+  @Get('oauth/:provider')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async oauthInit(@Req() req: AuthenticatedRequest, @Res() res: Response): Promise<void> {
+    const provider = (req.params as { provider: string }).provider;
+    await this.oauth.start(provider, req.query.registration === '1', res, {
+      username: req.query.username,
+    });
+  }
+
+  @Public()
+  @Get('oauth/:provider/callback')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  async oauthCallback(@Req() req: AuthenticatedRequest, @Res() res: Response): Promise<void> {
+    const frontend = (this.config.get<string>('frontendUrl') ?? '').replace(/\/$/, '');
+    try {
+      const result = await this.oauth.complete(
+        (req.params as { provider: string }).provider,
+        req,
+        res,
+      );
+      this.authService.setRefreshCookie(res, result.refreshToken);
+      res.redirect(`${frontend}/connexion?oauth=success`);
+    } catch {
+      // Ne jamais exposer code, jeton, détails de fournisseur ou existence d'un compte.
+      res.redirect(`${frontend}/connexion?oauth=${req.query.error ? 'cancelled' : 'error'}`);
+    }
   }
 }

@@ -13,14 +13,21 @@ import type { AddressDto, UpdateProfileDto } from './dto/user.dto';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { Wishlist } from '../wishlist/entities/wishlist.entity';
 import { Cart } from '../cart/entities/cart.entity';
+import { assertValidEmail, normalizeEmail } from '../common/validators/email-disposable.validator';
 
 export interface RegisterUserInput {
+  username: string;
   email: string;
   password: string;
-  firstName: string;
+  firstName?: string | null;
   lastName: string;
   phone?: string | null;
   role?: User['role'];
+  provider?: string | null;
+  providerId?: string | null;
+  avatarUrl?: string | null;
+  /** Réservé au backend OAuth après validation cryptographique du fournisseur. */
+  isEmailVerified?: boolean;
 }
 
 @Injectable()
@@ -44,29 +51,74 @@ export class UsersService {
 
   async findByEmail(email: string, withPassword = false): Promise<User | null> {
     return this.users.findOne({
-      where: { email: email.trim().toLowerCase() },
+      where: { email: normalizeEmail(email) },
       ...(withPassword
         ? {
             select: {
               id: true,
               email: true,
+              username: true,
               passwordHash: true,
               role: true,
               isActive: true,
+              isEmailVerified: true,
+              sessionVersion: true,
+              phone: true,
+              avatarUrl: true,
               firstName: true,
               lastName: true,
+              provider: true,
             },
           }
         : {}),
     });
   }
 
+  async findByUsername(username: string, withPassword = false): Promise<User | null> {
+    return this.users.findOne({
+      where: { username: username.trim().toLowerCase() },
+      ...(withPassword
+        ? {
+            select: {
+              id: true,
+              email: true,
+              username: true,
+              passwordHash: true,
+              role: true,
+              isActive: true,
+              isEmailVerified: true,
+              sessionVersion: true,
+              phone: true,
+              avatarUrl: true,
+              firstName: true,
+              lastName: true,
+              provider: true,
+            },
+          }
+        : {}),
+    });
+  }
+
+  async findByUsernameOrEmail(identifier: string, withPassword = false): Promise<User | null> {
+    const id = identifier.trim().toLowerCase();
+    if (id.includes('@')) return this.findByEmail(id, withPassword);
+    return this.findByUsername(id, withPassword);
+  }
+
   async create(input: RegisterUserInput): Promise<User> {
-    const email = input.email.trim().toLowerCase();
-    const existing = await this.findByEmail(email);
-    if (existing) {
+    const email = assertValidEmail(input.email);
+    const username = input.username.trim().toLowerCase();
+
+    const existingEmail = await this.findByEmail(email);
+    if (existingEmail)
       throw BusinessException.conflict('Cet email est déjà utilisé.', ErrorCode.EMAIL_ALREADY_USED);
-    }
+
+    const existingUsername = await this.findByUsername(username);
+    if (existingUsername)
+      throw BusinessException.conflict(
+        'Ce nom d’utilisateur est déjà pris.',
+        ErrorCode.USERNAME_ALREADY_USED,
+      );
 
     const passwordHash = await argon2.hash(input.password, {
       type: argon2.argon2id,
@@ -76,17 +128,21 @@ export class UsersService {
     });
 
     const user = this.users.create({
+      username,
       email,
       passwordHash,
-      firstName: input.firstName.trim(),
+      firstName: input.firstName?.trim() || null,
       lastName: input.lastName.trim(),
       phone: input.phone ?? null,
       role: input.role ?? UserRole.CUSTOMER,
+      provider: input.provider ?? null,
+      providerId: input.providerId ?? null,
+      avatarUrl: input.avatarUrl ?? null,
+      isEmailVerified: input.isEmailVerified === true,
     });
 
     const saved = await this.users.save(user);
 
-    // Le client dispose d'un panier et d'une liste de favoris dès l'inscription.
     await this.dataSource
       .getRepository(Cart)
       .save(this.dataSource.getRepository(Cart).create({ userId: saved.id }));
@@ -99,7 +155,7 @@ export class UsersService {
       action: AuditAction.USER_REGISTERED,
       entity: AuditEntity.USER,
       entityId: saved.id,
-      metadata: { email, role: saved.role },
+      metadata: { role: saved.role },
     });
 
     return saved;
@@ -108,22 +164,46 @@ export class UsersService {
   async updateProfile(userId: string, dto: UpdateProfileDto, request?: Request): Promise<User> {
     const user = await this.findById(userId);
 
-    if (dto.email && dto.email.trim().toLowerCase() !== user.email) {
-      const email = dto.email.trim().toLowerCase();
+    if (dto.username && dto.username.trim().toLowerCase() !== user.username) {
+      const u = dto.username.trim().toLowerCase();
+      const taken = await this.findByUsername(u);
+      if (taken)
+        throw BusinessException.conflict(
+          'Ce nom d’utilisateur est déjà pris.',
+          ErrorCode.USERNAME_ALREADY_USED,
+        );
+      user.username = u;
+    }
+    const normalizedEmail = dto.email !== undefined ? assertValidEmail(dto.email) : undefined;
+    const emailChanged = normalizedEmail !== undefined && normalizedEmail !== user.email;
+    if (emailChanged && normalizedEmail) {
+      const email = normalizedEmail;
       const taken = await this.findByEmail(email);
-      if (taken) {
+      if (taken)
         throw BusinessException.conflict(
           'Cet email est déjà utilisé par un autre compte.',
           ErrorCode.EMAIL_ALREADY_USED,
         );
-      }
       user.email = email;
+      user.isEmailVerified = false;
+      user.sessionVersion += 1;
     }
-    if (dto.firstName !== undefined) user.firstName = dto.firstName.trim();
+    if (dto.firstName !== undefined) user.firstName = dto.firstName?.trim() || null;
     if (dto.lastName !== undefined) user.lastName = dto.lastName.trim();
     if (dto.phone !== undefined) user.phone = dto.phone;
+    if (dto.avatarUrl !== undefined) user.avatarUrl = dto.avatarUrl;
 
     const saved = await this.users.save(user);
+    if (emailChanged) {
+      await this.dataSource
+        .getRepository(RefreshToken)
+        .createQueryBuilder()
+        .update()
+        .set({ revokedAt: new Date() })
+        .where('"user_id" = :userId', { userId })
+        .andWhere('"revoked_at" IS NULL')
+        .execute();
+    }
     await this.audit.log({
       userId,
       action: AuditAction.PROFILE_UPDATED,
@@ -143,17 +223,16 @@ export class UsersService {
   ): Promise<void> {
     const user = await this.users.findOne({
       where: { id: userId },
-      select: { id: true, passwordHash: true },
+      select: { id: true, passwordHash: true, sessionVersion: true },
     });
     if (!user) throw BusinessException.notFound('Utilisateur introuvable.', ErrorCode.NOT_FOUND);
 
     const valid = await argon2.verify(user.passwordHash, currentPassword).catch(() => false);
-    if (!valid) {
+    if (!valid)
       throw BusinessException.badRequest(
         'Mot de passe actuel incorrect.',
         ErrorCode.INVALID_CREDENTIALS,
       );
-    }
 
     user.passwordHash = await argon2.hash(newPassword, {
       type: argon2.argon2id,
@@ -161,9 +240,9 @@ export class UsersService {
       timeCost: 3,
       parallelism: 4,
     });
+    user.sessionVersion += 1;
     await this.users.save(user);
 
-    // On révoque toutes les sessions : l'ancien mot de passe ne doit plus marcher.
     await this.dataSource
       .getRepository(RefreshToken)
       .createQueryBuilder()
@@ -205,17 +284,14 @@ export class UsersService {
       country: dto.country ?? 'Madagascar',
       isDefault: dto.isDefault ?? count === 0,
     });
-
     if (address.isDefault) await this.clearDefault(userId);
     return this.addresses.save(address);
   }
 
   async updateAddress(userId: string, addressId: string, dto: AddressDto): Promise<Address> {
     const address = await this.addresses.findOne({ where: { id: addressId } });
-    if (!address || address.userId !== userId) {
+    if (!address || address.userId !== userId)
       throw BusinessException.notFound('Adresse introuvable.', ErrorCode.NOT_FOUND);
-    }
-
     Object.assign(address, {
       ...(dto.label !== undefined ? { label: dto.label } : {}),
       ...(dto.fullName !== undefined ? { fullName: dto.fullName } : {}),
@@ -227,16 +303,14 @@ export class UsersService {
       ...(dto.country !== undefined ? { country: dto.country } : {}),
       ...(dto.isDefault !== undefined ? { isDefault: dto.isDefault } : {}),
     });
-
     if (address.isDefault) await this.clearDefault(userId, addressId);
     return this.addresses.save(address);
   }
 
   async deleteAddress(userId: string, addressId: string): Promise<void> {
     const address = await this.addresses.findOne({ where: { id: addressId } });
-    if (!address || address.userId !== userId) {
+    if (!address || address.userId !== userId)
       throw BusinessException.notFound('Adresse introuvable.', ErrorCode.NOT_FOUND);
-    }
     await this.addresses.remove(address);
     if (address.isDefault) {
       const next = await this.addresses.findOne({ where: { userId }, order: { createdAt: 'ASC' } });
@@ -249,15 +323,12 @@ export class UsersService {
 
   async setDefaultAddress(userId: string, addressId: string): Promise<void> {
     const address = await this.addresses.findOne({ where: { id: addressId } });
-    if (!address || address.userId !== userId) {
+    if (!address || address.userId !== userId)
       throw BusinessException.notFound('Adresse introuvable.', ErrorCode.NOT_FOUND);
-    }
     await this.clearDefault(userId);
     address.isDefault = true;
     await this.addresses.save(address);
   }
-
-  /* ------------------------------ Administration ---------------------------- */
 
   async listUsers(query: {
     page?: number;
@@ -268,23 +339,19 @@ export class UsersService {
   }): Promise<{ items: User[]; total: number }> {
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
-
     const qb = this.users.createQueryBuilder('u');
-    if (query.search) {
+    if (query.search)
       qb.andWhere(
-        '(u.email ILIKE :search OR u."first_name" ILIKE :search OR u."last_name" ILIKE :search)',
+        '(u.email ILIKE :search OR u.username ILIKE :search OR u."first_name" ILIKE :search OR u."last_name" ILIKE :search)',
         { search: `%${query.search}%` },
       );
-    }
     if (query.role) qb.andWhere('u.role = :role', { role: query.role });
     if (query.inactiveOnly) qb.andWhere('u."is_active" = false');
-
     const [items, total] = await qb
       .orderBy('u.createdAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit)
       .getManyAndCount();
-
     return { items, total };
   }
 

@@ -75,12 +75,10 @@ export class NotificationsService {
     const saved = await this.notifications.save(notification);
 
     if (input.email) {
-      // Envoi d'e-mail asynchrone : la requête HTTP n'attend jamais le SMTP.
-      await this.queue.addEmail({
-        to: input.email.to,
-        subject: input.email.subject,
-        html: input.email.html,
-      });
+      const message = { to: input.email.to, subject: input.email.subject, html: input.email.html };
+      const queued = await this.queue.addEmail(message);
+      // Sans file disponible, la notification reste enregistrée et SMTP est tenté directement.
+      if (!queued) await this.mail.send(message);
     }
     return saved;
   }
