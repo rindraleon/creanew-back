@@ -31,15 +31,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // multer dans une exception dont le message reste anglais.
     const uploadError = this.translateUploadError(exception);
     if (uploadError) {
-      this.logger.warn(`${request.method} ${request.path} → 413 [${uploadError.code}]`);
-      response.status(HttpStatus.PAYLOAD_TOO_LARGE).json({
-        statusCode: HttpStatus.PAYLOAD_TOO_LARGE,
-        message: uploadError.message,
-        code: uploadError.code,
-        timestamp: new Date().toISOString(),
-        path: request.path,
-        ...(request.id ? { requestId: request.id } : {}),
-      } satisfies ApiErrorResponse);
+      this.respondWithTranslatedError(
+        response,
+        request,
+        uploadError,
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
       return;
     }
 
@@ -47,55 +44,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // (requête brute, filtre, ordre de tri…) doit ressortir en 400, pas en 500.
     const uuidError = this.translateUuidError(exception);
     if (uuidError) {
-      this.logger.warn(`${request.method} ${request.path} → 400 [${uuidError.code}]`);
-      response.status(HttpStatus.BAD_REQUEST).json({
-        statusCode: HttpStatus.BAD_REQUEST,
-        message: uuidError.message,
-        code: uuidError.code,
-        timestamp: new Date().toISOString(),
-        path: request.path,
-        ...(request.id ? { requestId: request.id } : {}),
-      } satisfies ApiErrorResponse);
+      this.respondWithTranslatedError(response, request, uuidError, HttpStatus.BAD_REQUEST);
       return;
     }
 
-    if (exception instanceof BusinessException) {
-      message = (exception.getResponse() as { message: string | string[] }).message;
-      code = exception.code as ErrorCode;
-      errors = exception.details as Record<string, string[]> | undefined;
-    } else if (exception instanceof HttpException) {
-      const payload = exception.getResponse();
-      if (typeof payload === 'string') {
-        message = payload;
-      } else if (typeof payload === 'object' && payload !== null) {
-        const record = payload as Record<string, unknown>;
-        message = (record.message as string | string[]) ?? message;
-        if (Array.isArray(record.message)) {
-          errors = { _: record.message as string[] };
-        }
-        if (typeof record.error === 'string' && record.error) {
-          code = this.mapStatusToCode(status, record.error);
-        }
-      }
-      code = code === ErrorCode.INTERNAL_ERROR ? this.mapStatusToCode(status) : code;
-    }
+    ({ message, code, errors } = this.getErrorDetails(exception, status));
 
     // Les erreurs 500 ne doivent jamais exposer le message interne.
-    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
-      this.logger.error(
-        `${request.method} ${request.path} → ${status}`,
-        exception instanceof Error ? exception.stack : String(exception),
-      );
-      if (process.env.NODE_ENV === 'production') {
-        message = 'Une erreur interne est survenue.';
-      }
-    } else {
-      this.logger.warn(
-        `${request.method} ${request.path} → ${status} [${code}] ${
-          Array.isArray(message) ? message.join(' | ') : message
-        }`,
-      );
-    }
+    message = this.logException(exception, request, status, code, message);
 
     const body: ApiErrorResponse = {
       statusCode: status,
@@ -108,6 +64,94 @@ export class AllExceptionsFilter implements ExceptionFilter {
     };
 
     response.status(status).json(body);
+  }
+
+  private respondWithTranslatedError(
+    response: Response,
+    request: Request & { id?: string },
+    error: { message: string; code: ErrorCode },
+    status: HttpStatus,
+  ): void {
+    this.logger.warn(`${request.method} ${request.path} → ${status} [${error.code}]`);
+    response.status(status).json({
+      statusCode: status,
+      message: error.message,
+      code: error.code,
+      timestamp: new Date().toISOString(),
+      path: request.path,
+      ...(request.id ? { requestId: request.id } : {}),
+    } satisfies ApiErrorResponse);
+  }
+
+  private getErrorDetails(
+    exception: unknown,
+    status: HttpStatus,
+  ): { message: string | string[]; code: ErrorCode; errors?: Record<string, string[]> } {
+    let message: string | string[] = 'Une erreur inattendue est survenue.';
+    let code: ErrorCode = ErrorCode.INTERNAL_ERROR;
+    let errors: Record<string, string[]> | undefined;
+
+    if (exception instanceof BusinessException) {
+      message = (exception.getResponse() as { message: string | string[] }).message;
+      code = exception.code as ErrorCode;
+      errors = exception.details as Record<string, string[]> | undefined;
+    } else if (exception instanceof HttpException) {
+      ({ message, code, errors } = this.getHttpErrorDetails(exception, status, {
+        message,
+        code,
+        errors,
+      }));
+    }
+
+    return { message, code, errors };
+  }
+
+  private getHttpErrorDetails(
+    exception: HttpException,
+    status: HttpStatus,
+    details: { message: string | string[]; code: ErrorCode; errors?: Record<string, string[]> },
+  ): { message: string | string[]; code: ErrorCode; errors?: Record<string, string[]> } {
+    let { message, code, errors } = details;
+    const payload = exception.getResponse();
+    if (typeof payload === 'string') {
+      message = payload;
+    } else if (typeof payload === 'object' && payload !== null) {
+      const record = payload as Record<string, unknown>;
+      message = (record.message as string | string[]) ?? message;
+      if (Array.isArray(record.message)) {
+        errors = { _: record.message as string[] };
+      }
+      if (typeof record.error === 'string' && record.error) {
+        code = this.mapStatusToCode(status, record.error);
+      }
+    }
+    code = code === ErrorCode.INTERNAL_ERROR ? this.mapStatusToCode(status) : code;
+    return { message, code, errors };
+  }
+
+  private logException(
+    exception: unknown,
+    request: Request,
+    status: HttpStatus,
+    code: ErrorCode,
+    message: string | string[],
+  ): string | string[] {
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
+      this.logger.error(
+        `${request.method} ${request.path} → ${status}`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+      return process.env.NODE_ENV === 'production'
+        ? 'Une erreur interne est survenue.'
+        : message;
+    }
+
+    this.logger.warn(
+      `${request.method} ${request.path} → ${status} [${code}] ${
+        Array.isArray(message) ? message.join(' | ') : message
+      }`,
+    );
+    return message;
   }
 
   /** Traduit une erreur d'upload en message français actionnable. */

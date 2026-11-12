@@ -134,7 +134,11 @@ export enum ShippingMethod {
   PICKUP = 'pickup',
 }
 
-/** Buckets MinIO autorisés. Jamais choisis librement par le client. */
+/**
+ * Espaces de stockage logiques. Tous les fichiers sont rangés dans un seul
+ * bucket MinIO, sous un préfixe correspondant à ces valeurs (jamais choisi
+ * librement par le client).
+ */
 export enum StorageBucket {
   PRODUCTS = 'products',
   AVATARS = 'avatars',

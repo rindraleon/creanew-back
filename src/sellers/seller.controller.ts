@@ -57,6 +57,22 @@ export class SellerController {
     return this.productsService.findAll(query, { ownerId: seller.id });
   }
 
+  @Get('products/:id')
+  @ApiOperation({ summary: '[Vendeur approuvé] Détail d’un de mes produits (tous statuts)' })
+  async product(
+    @Param('id', UuidParamPipe) id: string,
+    @Req() request: AuthenticatedRequest,
+  ): Promise<Product> {
+    const seller = request.seller;
+    if (!seller) {
+      throw BusinessException.forbidden(
+        'Aucune boutique associée à ce compte.',
+        ErrorCode.NOT_SELLER,
+      );
+    }
+    return this.productsService.findForSeller(id, seller.id);
+  }
+
   @Get('orders')
   @ApiOperation({
     summary: '[Vendeur approuvé] Commandes contenant mes produits',
@@ -93,9 +109,9 @@ export class SellerController {
   @ApiOperation({ summary: '[Vendeur approuvé] Analyses : sales | products' })
   @ApiResponse({ status: 403, description: 'Vendeur non approuvé.' })
   async analytics(
+    @Req() request: AuthenticatedRequest,
     @Query('type') type: 'sales' | 'products' = 'sales',
     @Query('period') period: '7d' | '30d' | 'this_month' | 'this_year' = '30d',
-    @Req() request: AuthenticatedRequest,
   ) {
     const seller = request.seller;
     if (!seller) throw new Error('SELLER_CONTEXT_MISSING');
@@ -114,8 +130,8 @@ export class SellerController {
   @Get('sales')
   @ApiOperation({ summary: '[Vendeur approuvé] Ventes par période' })
   async sales(
-    @Query('period') period: '7d' | '30d' | 'this_month' | 'this_year' = '30d',
     @Req() request: AuthenticatedRequest,
+    @Query('period') period: '7d' | '30d' | 'this_month' | 'this_year' = '30d',
   ) {
     const seller = request.seller;
     if (!seller) throw new Error('SELLER_CONTEXT_MISSING');

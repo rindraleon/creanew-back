@@ -28,6 +28,8 @@ import {
 import { Product } from './entities/product.entity';
 import type { Paginated } from '../common/interfaces/paginated.interface';
 import { UuidParamPipe } from '../common/pipes/uuid-param.pipe';
+import { BusinessException } from '../common/errors/business.exception';
+import { ErrorCode } from '../common/errors/error-codes';
 
 @ApiTags('products')
 @Controller('products')
@@ -60,13 +62,13 @@ export class ProductsController {
   /* --------------------------------- Vendeur -------------------------------- */
 
   @Post()
-  @Roles(UserRole.SELLER)
+  @Roles(UserRole.SELLER, UserRole.ADMIN)
   @RequireApprovedSeller()
   @ApiBearerAuth('access-token')
   @ApiOperation({
-    summary: '[Vendeur approuvé] Créer un produit',
+    summary: '[Vendeur approuvé / Admin] Créer un produit',
     description:
-      "Le vendeur est déduit du JWT : aucun `sellerId` n'est accepté depuis le frontend.",
+      'Pour un vendeur, le vendeur est déduit du JWT. Pour un administrateur, `sellerId` est exigé.',
   })
   @ApiResponse({ status: 201, type: ProductResponseDto })
   @ApiResponse({ status: 403, description: 'Vendeur non approuvé.' })
@@ -74,6 +76,18 @@ export class ProductsController {
     @Body() dto: CreateProductDto,
     @Req() request: AuthenticatedRequest,
   ): Promise<Product> {
+    const user = requireUser(request);
+
+    if (user.role === UserRole.ADMIN) {
+      if (!dto.sellerId) {
+        throw BusinessException.badRequest(
+          "sellerId est requis lorsqu'un administrateur crée un produit.",
+          ErrorCode.VALIDATION_ERROR,
+        );
+      }
+      return this.productsService.createForSeller(dto.sellerId, dto, request);
+    }
+
     const seller = request.seller;
     if (!seller) {
       throw new Error('SELLER_CONTEXT_MISSING');

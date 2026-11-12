@@ -17,6 +17,7 @@ import { OrdersService } from '../orders/orders.service';
 import { PaymentsService } from '../payments/payments.service';
 import { SellersService } from '../sellers/sellers.service';
 import { ProductsService } from '../products/products.service';
+import { CategoryQueryDto } from '../categories/dto/category.dto';
 import { ProductQueryDto } from '../products/dto/product.dto';
 import { Product } from '../products/entities/product.entity';
 import { CategoriesService } from '../categories/categories.service';
@@ -251,8 +252,12 @@ export class AdminController {
 
   @Get('categories')
   @ApiOperation({ summary: '[Admin] Lister les catégories (y compris inactives)' })
-  async categories() {
-    return this.categoriesService.findAll(true);
+  async categories(@Query() query: CategoryQueryDto) {
+    return this.categoriesService.findAll({
+      includeInactive: true,
+      search: query.search,
+      isActive: query.isActive,
+    });
   }
 
   /* --------------------------------- Commandes ------------------------------- */

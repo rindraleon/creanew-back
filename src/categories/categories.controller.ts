@@ -11,9 +11,9 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { AuthenticatedRequest } from '../common/interfaces/authenticated-request.interface';
-import { CategoriesService } from './categories.service';
+import { CategoriesService, type CategoryWithCount } from './categories.service';
 import { Public } from '../common/decorators/public.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/enums';
@@ -23,7 +23,6 @@ import {
   CreateCategoryDto,
   UpdateCategoryDto,
 } from './dto/category.dto';
-import { Category } from './entities/category.entity';
 import { UuidParamPipe } from '../common/pipes/uuid-param.pipe';
 
 @ApiTags('categories')
@@ -33,24 +32,33 @@ export class CategoriesController {
 
   @Public()
   @Get()
-  @ApiOperation({ summary: 'Lister les catégories (publiques)' })
+  @ApiOperation({ summary: 'Catégories actives du catalogue public' })
   @ApiResponse({ status: 200, type: [CategoryResponseDto] })
-  @ApiQuery({ name: 'includeInactive', required: false, type: Boolean })
-  async findAll(@Query() query: CategoryQueryDto): Promise<Category[]> {
-    const isAdmin = (query.includeInactive ?? false) === true;
-    return this.categoriesService.findAll(isAdmin);
+  async findAll(@Query() query: CategoryQueryDto): Promise<CategoryWithCount[]> {
+    return this.categoriesService.findAll({ search: query.search, isActive: true });
+  }
+
+  @Get('admin/all')
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: '[Admin] Toutes les catégories, actives et inactives' })
+  @ApiResponse({ status: 200, type: [CategoryResponseDto] })
+  async findAllForAdmin(@Query() query: CategoryQueryDto): Promise<CategoryWithCount[]> {
+    return this.categoriesService.findAll({
+      includeInactive: query.includeInactive ?? true,
+      search: query.search,
+      isActive: query.isActive,
+    });
   }
 
   @Public()
   @Get(':slug')
-  @ApiOperation({ summary: 'Détail d’une catégorie par slug' })
+  @ApiOperation({ summary: 'Détail d’une catégorie active par slug' })
   @ApiResponse({ status: 200, type: CategoryResponseDto })
   @ApiResponse({ status: 404, description: 'Catégorie introuvable.' })
-  async findBySlug(@Param('slug') slug: string): Promise<Category> {
+  async findBySlug(@Param('slug') slug: string): Promise<CategoryWithCount> {
     return this.categoriesService.findBySlug(slug);
   }
-
-  /* --------------------------- Administration --------------------------- */
 
   @Post()
   @Roles(UserRole.ADMIN)
@@ -60,7 +68,7 @@ export class CategoriesController {
   async create(
     @Body() dto: CreateCategoryDto,
     @Req() request: AuthenticatedRequest,
-  ): Promise<Category> {
+  ): Promise<CategoryWithCount> {
     return this.categoriesService.create(dto, request);
   }
 
@@ -72,7 +80,7 @@ export class CategoriesController {
     @Param('id', UuidParamPipe) id: string,
     @Body() dto: UpdateCategoryDto,
     @Req() request: AuthenticatedRequest,
-  ): Promise<Category> {
+  ): Promise<CategoryWithCount> {
     return this.categoriesService.update(id, dto, request);
   }
 

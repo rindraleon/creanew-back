@@ -1,8 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsInt, IsOptional, IsString, Length, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+  Matches,
+  Max,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import { slugify as slugifyFn } from '../../common/utils/slug.util';
 import { ApplyTransform } from '../../common/decorators/transform.decorator';
+
+const OBJECT_KEY_PATTERN = /^[a-z0-9][a-z0-9/_-]{2,}\.[a-z0-9]{1,8}$/i;
 
 export class CreateCategoryDto {
   @ApiProperty({ example: 'Canapés' })
@@ -19,12 +32,17 @@ export class CreateCategoryDto {
   @ApiPropertyOptional({ example: 'Canapés et banquettes pour le salon.' })
   @IsOptional()
   @IsString()
+  @Length(0, 2000)
   description?: string;
 
-  @ApiPropertyOptional({ example: 'https://.../categories/canapes.jpg' })
+  @ApiPropertyOptional({
+    example: 'products/2026/11/8d1b6c2a-7f2f-4e46-9b2f-0c9a1d3c5e77.webp',
+    description: 'Clé objet renvoyée par POST /files/upload. Aucune URL externe acceptée.',
+  })
   @IsOptional()
   @IsString()
-  imageUrl?: string;
+  @Matches(OBJECT_KEY_PATTERN, { message: 'imageObjectKey invalide.' })
+  imageObjectKey?: string;
 
   @ApiPropertyOptional({ example: 0 })
   @IsOptional()
@@ -39,7 +57,15 @@ export class CreateCategoryDto {
   @IsBoolean()
   isActive?: boolean;
 
-  /** Normalise le slug reçu ou le dérive du nom. */
+  @ApiPropertyOptional({
+    example: '5c1d4f7a-2f3e-4c8b-9d10-2b7a6e5f4d3c',
+    description: 'Catégorie parente (hiérarchie sur un seul niveau).',
+  })
+  @IsOptional()
+  @ValidateIf((_object, value) => value !== null)
+  @IsUUID('4', { message: 'parentId doit être un identifiant valide.' })
+  parentId?: string | null;
+
   normalizedSlug(): string {
     return slugifyFn(this.slug && this.slug.trim() ? this.slug : this.name);
   }
@@ -61,12 +87,16 @@ export class UpdateCategoryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @Length(0, 2000)
   description?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'Nouvelle clé objet. Envoyer une chaîne vide retire l’image.',
+  })
   @IsOptional()
   @IsString()
-  imageUrl?: string;
+  @Matches(/^$|^[a-z0-9][a-z0-9/_-]{2,}\.[a-z0-9]{1,8}$/i, { message: 'imageObjectKey invalide.' })
+  imageObjectKey?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -80,6 +110,14 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Nouvelle catégorie parente. Envoyer null retire le parent.',
+  })
+  @IsOptional()
+  @ValidateIf((_object, value) => value !== null)
+  @IsUUID('4', { message: 'parentId doit être un identifiant valide.' })
+  parentId?: string | null;
 }
 
 export class CategoryResponseDto {
@@ -87,33 +125,35 @@ export class CategoryResponseDto {
   @ApiProperty() name!: string;
   @ApiProperty() slug!: string;
   @ApiPropertyOptional() description!: string | null;
+  @ApiPropertyOptional() imageObjectKey!: string | null;
   @ApiPropertyOptional() imageUrl!: string | null;
   @ApiProperty() position!: number;
   @ApiProperty() isActive!: boolean;
-  @ApiPropertyOptional({ description: 'Nombre de produits publiés.' })
-  productCount?: number;
+  @ApiPropertyOptional() parentId!: string | null;
+  @ApiPropertyOptional() parentName!: string | null;
+  @ApiProperty({ description: 'Nombre de produits rattachés (tous statuts).' })
+  productCount!: number;
+  @ApiProperty({ description: 'Nombre de sous-catégories.' })
+  childCount!: number;
   @ApiProperty() createdAt!: Date;
 }
 
 export class CategoryQueryDto {
-  @ApiPropertyOptional({ example: 1 })
+  @ApiPropertyOptional({ description: 'Recherche sur le nom ou la description.' })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
+  @IsString()
+  @Length(1, 120)
+  search?: string;
 
-  @ApiPropertyOptional({ example: 100 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit?: number = 100;
-
-  @ApiPropertyOptional({ description: 'Inclure les catégories inactives (admin).' })
+  @ApiPropertyOptional({ description: 'Filtrer par état (admin).' })
   @IsOptional()
   @IsBoolean()
-  @ApplyTransform(({ value }) => value === true || value === 'true')
+  @ApplyTransform(({ value }: { value: unknown }) => value === true || value === 'true')
+  isActive?: boolean;
+
+  @ApiPropertyOptional({ description: 'Inclure les catégories inactives (admin uniquement).' })
+  @IsOptional()
+  @IsBoolean()
+  @ApplyTransform(({ value }: { value: unknown }) => value === true || value === 'true')
   includeInactive?: boolean;
 }

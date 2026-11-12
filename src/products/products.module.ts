@@ -5,12 +5,14 @@ import { ProductsController } from './products.controller';
 import { Product } from './entities/product.entity';
 import { ProductImage } from './entities/product-image.entity';
 import { CategoriesModule } from '../categories/categories.module';
+import { CollectionsModule } from '../collections/collections.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Product, ProductImage]),
     CategoriesModule,
+    CollectionsModule,
     NotificationsModule,
   ],
   controllers: [ProductsController],

@@ -27,10 +27,13 @@ export class CollectionsService {
     });
   }
 
+  async findPublishedBySlug(slug: string): Promise<Collection | null> {
+    return this.collections.findOne({ where: { slug, isPublished: true } });
+  }
+
   async findBySlug(slug: string): Promise<Collection> {
-    const col = await this.collections.findOne({ where: { slug } });
-    if (!col || !col.isPublished)
-      throw BusinessException.notFound('Collection introuvable.', ErrorCode.NOT_FOUND);
+    const col = await this.findPublishedBySlug(slug);
+    if (!col) throw BusinessException.notFound('Collection introuvable.', ErrorCode.NOT_FOUND);
     return col;
   }
 

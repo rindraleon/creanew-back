@@ -23,11 +23,10 @@ import { assertValidEmail, validateEmail } from '../common/validators/email-disp
 import { RedisService } from '../shared/redis/redis.service';
 
 const REFRESH_TOKEN_BYTES = 48;
+const CONCURRENT_REPLAY_WINDOW_MS = 10_000;
+const CONCURRENT_REPLAY_MAX = 2;
 const RESET_TOKEN_BYTES = 32;
 const RESET_TOKEN_TTL_MINUTES = 30;
-// Hash de temporisation sans compte associé, pour réduire les différences de réponse.
-const DUMMY_PASSWORD_HASH =
-  '$argon2id$v=19$m=65536,t=3,p=4$7ZzIdiJARHRqmPrNBxuvxw$Sirmdy383oTz5GS+Z+zqvuduhCLOp+TVuGRzHSssTM0';
 
 const LOGIN_MAX_ATTEMPTS_DEFAULT = 5;
 const LOGIN_LOCK_TTL_SECONDS_DEFAULT = 15 * 60;
@@ -35,6 +34,8 @@ const LOGIN_LOCK_TTL_SECONDS_DEFAULT = 15 * 60;
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
+
+  private readonly dummyPasswordHash = argon2.hash(crypto.randomBytes(32).toString('hex'));
 
   private readonly loginFailures = new Map<string, { count: number; expiresAt: number }>();
 
@@ -132,7 +133,7 @@ export class AuthService {
       );
     }
     const passwordValid = await argon2
-      .verify(user?.passwordHash ?? DUMMY_PASSWORD_HASH, dto.password)
+      .verify(user?.passwordHash ?? (await this.dummyPasswordHash), dto.password)
       .catch(() => false);
     if (!user || !passwordValid || !validateEmail(user.email).valid) {
       await this.writeLoginFailures(identifierKey, identifierFailures + 1, lockTtl);
@@ -192,8 +193,20 @@ export class AuthService {
       );
     }
 
-    // Réutilisation détectée (vol probable) : on révoque toute la famille.
     if (stored.revokedAt) {
+      const replay = await this.isConcurrentReplay(stored, tokenHash);
+      if (replay) {
+        await this.audit.log({
+          userId: stored.userId,
+          action: AuditAction.USER_LOGOUT,
+          entity: AuditEntity.AUTH,
+          request,
+          metadata: { reason: 'refresh_concurrent_replay' },
+        });
+        return this.issueTokens(stored.user, request);
+      }
+
+      // Réutilisation détectée (vol probable) : on révoque toute la famille.
       await this.revokeFamily(stored.userId, tokenHash);
       await this.dataSource
         .getRepository(User)
@@ -236,6 +249,27 @@ export class AuthService {
       await this.refreshTokens.save([stored, created]);
     }
     return response;
+  }
+
+  private async isConcurrentReplay(stored: RefreshToken, tokenHash: string): Promise<boolean> {
+    const rotatedAt = stored.revokedAt?.getTime() ?? 0;
+    if (Date.now() - rotatedAt > CONCURRENT_REPLAY_WINDOW_MS) {
+      return false;
+    }
+    if (!stored.replacedById) {
+      return false;
+    }
+    const successor = await this.refreshTokens.findOne({ where: { id: stored.replacedById } });
+    if (!successor || successor.revokedAt || successor.expiresAt.getTime() < Date.now()) {
+      return false;
+    }
+    const key = `auth:replay:${tokenHash}`;
+    const previous = (await this.redis.get<number>(key)) ?? 0;
+    if (previous >= CONCURRENT_REPLAY_MAX) {
+      return false;
+    }
+    await this.redis.set(key, previous + 1, Math.ceil(CONCURRENT_REPLAY_WINDOW_MS / 1000) * 3);
+    return true;
   }
 
   async logout(token: string | undefined, request?: Request): Promise<void> {
@@ -469,9 +503,19 @@ export class AuthService {
   private ttlToSeconds(ttl: string): number {
     const match = /^(\d+)([smhd])$/.exec(ttl.trim());
     if (!match) return 900;
+
     const value = Number(match[1]);
     const unit = match[2];
-    const factor = unit === 's' ? 1 : unit === 'm' ? 60 : unit === 'h' ? 3600 : 86400;
+    let factor = 86400;
+
+    if (unit === 's') {
+      factor = 1;
+    } else if (unit === 'm') {
+      factor = 60;
+    } else if (unit === 'h') {
+      factor = 3600;
+    }
+
     return value * factor;
   }
 

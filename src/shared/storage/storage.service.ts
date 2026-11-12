@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
 import * as Minio from 'minio';
 import { StorageBucket } from '../../common/enums';
@@ -23,7 +25,6 @@ export interface StoredObject {
   originalName: string;
 }
 
-/** Whitelist MIME → extension. Le client ne choisit jamais le chemin ni l'extension. */
 const IMAGE_MIME: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
@@ -44,6 +45,8 @@ const BUCKET_POLICY: Record<StorageBucket, { mime: Record<string, string>; maxSi
   [StorageBucket.PAYMENT_PROOFS]: { mime: DOCUMENT_MIME, maxSize: 5 * 1024 * 1024 },
 };
 
+export type StorageDriver = 'minio' | 'local';
+
 @Injectable()
 export class StorageService {
   private readonly logger = new Logger(StorageService.name);
@@ -52,57 +55,77 @@ export class StorageService {
 
   constructor(private readonly config: ConfigService) {}
 
+  get driver(): StorageDriver {
+    return this.isConfigured ? 'minio' : 'local';
+  }
+
   get isConfigured(): boolean {
     return Boolean(
       this.config.get<string>('storage.accessKey') && this.config.get<string>('storage.secretKey'),
     );
   }
 
+  get localDir(): string {
+    const configured = this.config.get<string>('storage.localDir');
+    return path.resolve(configured?.trim() ? configured : 'uploads');
+  }
+
+  get publicPrefix(): string {
+    return (this.config.get<string>('storage.localUrlPrefix') ?? '/uploads').replace(/\/$/, '');
+  }
+
+  /** Bucket physique unique utilisé pour tous les fichiers du projet. */
+  get bucket(): string {
+    return this.config.get<string>('storage.bucket') ?? 'creanew';
+  }
+
+  /** Préfixes logiques (dossiers) utilisés à l'intérieur du bucket unique. */
+  get prefixes(): StorageBucket[] {
+    return Object.values(StorageBucket);
+  }
+
   private getClient(): Minio.Client {
-    if (!this.isConfigured) {
-      throw new BusinessException(
-        "Le stockage de fichiers n'est pas configuré sur ce serveur.",
-        500,
-        { code: ErrorCode.INTERNAL_ERROR },
-      );
-    }
-    if (!this.client) {
-      this.client = new Minio.Client({
-        endPoint: this.config.get<string>('storage.endpoint') ?? 'localhost',
-        port: this.config.get<number>('storage.port') ?? 9000,
-        useSSL: this.config.get<boolean>('storage.useSSL') ?? false,
-        accessKey: this.config.get<string>('storage.accessKey') ?? '',
-        secretKey: this.config.get<string>('storage.secretKey') ?? '',
-        region: this.config.get<string>('storage.region') ?? 'mg-central-1',
-      });
-    }
+    this.client ??= new Minio.Client({
+      endPoint: this.config.get<string>('storage.endpoint') ?? 'localhost',
+      port: this.config.get<number>('storage.port') ?? 9000,
+      useSSL: this.config.get<boolean>('storage.useSSL') ?? false,
+      accessKey: this.config.get<string>('storage.accessKey') ?? '',
+      secretKey: this.config.get<string>('storage.secretKey') ?? '',
+      region: this.config.get<string>('storage.region') ?? 'mg-central-1',
+    });
     return this.client;
   }
 
-  /** Crée les buckets au démarrage (idempotent, n'échoue pas la requête). */
   async ensureBuckets(): Promise<void> {
-    if (!this.isConfigured) {
-      this.logger.warn('MinIO non configuré : buckets non initialisés.');
+    if (this.driver === 'local') {
+      try {
+        await fsp.mkdir(this.localDir, { recursive: true });
+        this.ready = true;
+        this.logger.log(`Stockage local initialisé : ${this.localDir}`);
+      } catch (error) {
+        this.logger.error(`Stockage local indisponible : ${(error as Error).message}`);
+      }
       return;
     }
-    const client = this.getClient();
-    const buckets = this.config.get<Record<StorageBucket, string>>('storage.buckets');
-    if (!buckets) return;
 
-    for (const bucket of Object.values(buckets)) {
-      try {
-        const exists = await client.bucketExists(bucket);
-        if (!exists) await client.makeBucket(bucket, this.config.get<string>('storage.region'));
-      } catch (error) {
-        this.logger.warn(`Bucket "${bucket}" indisponible : ${(error as Error).message}`);
-      }
+    const name = this.bucket;
+    try {
+      const client = this.getClient();
+      const exists = await client.bucketExists(name);
+      if (!exists) await client.makeBucket(name, this.config.get<string>('storage.region'));
+      this.ready = true;
+      this.logger.log(`Bucket MinIO "${name}" prêt.`);
+    } catch (error) {
+      this.logger.warn(`Bucket "${name}" indisponible : ${(error as Error).message}`);
     }
-    this.ready = true;
   }
 
   validateFile(bucket: StorageBucket, file: UploadedFileLike): void {
     const policy = BUCKET_POLICY[bucket];
-    if (!file || !file.buffer) {
+    if (!policy) {
+      throw BusinessException.badRequest('Bucket invalide.', ErrorCode.VALIDATION_ERROR);
+    }
+    if (!file?.buffer) {
       throw BusinessException.badRequest('Fichier manquant.', ErrorCode.VALIDATION_ERROR);
     }
     if (file.size <= 0) {
@@ -122,12 +145,12 @@ export class StorageService {
     }
   }
 
-  buildObjectKey(bucket: string, file: UploadedFileLike): string {
+  buildObjectKey(prefix: string, file: UploadedFileLike): string {
     const extension = this.extensionFor(file);
     const now = new Date();
     const yyyy = now.getUTCFullYear();
     const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-    return `${bucket}/${yyyy}/${mm}/${crypto.randomUUID()}.${extension}`;
+    return `${prefix}/${yyyy}/${mm}/${crypto.randomUUID()}.${extension}`;
   }
 
   private extensionFor(file: UploadedFileLike): string {
@@ -144,19 +167,24 @@ export class StorageService {
     metadata: Record<string, string> = {},
   ): Promise<StoredObject> {
     this.validateFile(bucket, file);
-    const client = this.getClient();
     const bucketName = this.bucketName(bucket);
-    const objectKey = this.buildObjectKey(bucketName, file);
+    const objectKey = this.buildObjectKey(bucket, file);
 
-    await client.putObject(bucketName, objectKey, file.buffer, file.size, {
-      'Content-Type': file.mimetype,
-      ...metadata,
-    });
+    if (this.driver === 'local') {
+      const target = this.localPath(objectKey, true);
+      await fsp.mkdir(path.dirname(target), { recursive: true });
+      await fsp.writeFile(target, file.buffer);
+    } else {
+      await this.getClient().putObject(bucketName, objectKey, file.buffer, file.size, {
+        'Content-Type': file.mimetype,
+        ...metadata,
+      });
+    }
 
     return {
       bucket,
       objectKey,
-      url: this.publicUrl(bucketName, objectKey),
+      url: this.publicUrl(objectKey),
       mimeType: file.mimetype,
       size: file.size,
       originalName: sanitizeOriginalName(file.originalname),
@@ -165,45 +193,94 @@ export class StorageService {
 
   async delete(bucket: StorageBucket, objectKey: string): Promise<void> {
     if (!objectKey) return;
-    const client = this.getClient();
+    const bucketName = this.bucketName(bucket);
     try {
-      await client.removeObject(this.bucketName(bucket), objectKey);
+      if (this.driver === 'local') {
+        await fsp.rm(this.localPath(objectKey), { force: true });
+      } else {
+        await this.getClient().removeObject(bucketName, objectKey);
+      }
     } catch (error) {
       this.logger.warn(`Suppression objet impossible : ${(error as Error).message}`);
     }
   }
 
-  /** URL signée temporaire (objets privés). */
+  async deleteByKey(objectKey: string | null | undefined): Promise<void> {
+    if (!objectKey) return;
+    const prefix = objectKey.split('/')[0];
+    if (!(this.prefixes as string[]).includes(prefix)) return;
+    await this.delete(prefix as StorageBucket, objectKey);
+  }
+
   async getPresignedUrl(
     bucket: StorageBucket,
     objectKey: string,
     expirySeconds = 3600,
   ): Promise<string> {
-    const client = this.getClient();
-    return client.presignedGetObject(this.bucketName(bucket), objectKey, expirySeconds);
+    if (this.driver === 'local') {
+      return this.publicUrl(objectKey);
+    }
+    return this.getClient().presignedGetObject(this.bucketName(bucket), objectKey, expirySeconds);
   }
 
-  getStatus(): { configured: boolean; ready: boolean; buckets: Record<string, string> } {
+  getStatus(): {
+    driver: StorageDriver;
+    configured: boolean;
+    ready: boolean;
+    bucket: string;
+    prefixes: StorageBucket[];
+  } {
     return {
+      driver: this.driver,
       configured: this.isConfigured,
       ready: this.ready,
-      buckets: (this.config.get<Record<StorageBucket, string>>('storage.buckets') ?? {}) as Record<
-        string,
-        string
-      >,
+      bucket: this.bucket,
+      prefixes: this.prefixes,
     };
   }
 
   private bucketName(bucket: StorageBucket): string {
-    const buckets = this.config.get<Record<StorageBucket, string>>('storage.buckets');
-    const name = buckets?.[bucket];
-    if (!name) throw BusinessException.badRequest('Bucket invalide.', ErrorCode.VALIDATION_ERROR);
-    return name;
+    if (!(this.prefixes as string[]).includes(bucket)) {
+      throw BusinessException.badRequest('Bucket invalide.', ErrorCode.VALIDATION_ERROR);
+    }
+    return this.bucket;
   }
 
-  publicUrl(bucketName: string, objectKey: string): string {
+  private localPath(objectKey: string, createRoot = false): string {
+    const root = path.resolve(this.localDir);
+    const target = path.resolve(root, objectKey.replace(/^\/+/, ''));
+    if (createRoot) return target;
+    if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+      throw BusinessException.badRequest('Chemin de fichier invalide.', ErrorCode.VALIDATION_ERROR);
+    }
+    return target;
+  }
+
+  publicUrl(objectKey: string): string {
+    const key = objectKey.trim().replace(/^\/+/, '');
+    if (this.driver === 'local') {
+      return `${this.publicPrefix}/${key}`;
+    }
     const base = (this.config.get<string>('storage.publicUrl') ?? '').replace(/\/$/, '');
-    return `${base}/${bucketName}/${objectKey}`;
+    if (key.startsWith(`${this.bucket}/`)) return `${base}/${key}`;
+    return `${base}/${this.bucket}/${key}`;
+  }
+
+  urlForKey(objectKey: string): string {
+    return this.publicUrl(objectKey);
+  }
+
+  isLocalFile(pathname: string): boolean {
+    if (this.driver !== 'local' || !pathname.startsWith(`${this.publicPrefix}/`)) return false;
+    const relative = pathname.slice(this.publicPrefix.length + 1);
+    const resolved = path.resolve(this.localDir, relative);
+    return resolved.startsWith(`${path.resolve(this.localDir)}${path.sep}`);
+  }
+
+  localFileExists(pathname: string): boolean {
+    if (!this.isLocalFile(pathname)) return false;
+    const relative = pathname.slice(this.publicPrefix.length + 1);
+    return fs.existsSync(path.resolve(this.localDir, relative));
   }
 }
 

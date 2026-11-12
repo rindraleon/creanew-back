@@ -5,7 +5,6 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  ParseEnumPipe,
   Post,
   Query,
   Req,
@@ -25,12 +24,12 @@ import type { AuthenticatedRequest } from '../common/interfaces/authenticated-re
 import { StorageService, type UploadedFileLike } from '../shared/storage/storage.service';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, type JwtUser } from '../common/decorators/current-user.decorator';
-import { StorageBucket, UserRole } from '../common/enums';
+import { StorageBucket, UserRole , AuditAction, AuditEntity } from '../common/enums';
 import { BusinessException } from '../common/errors/business.exception';
 import { ErrorCode } from '../common/errors/error-codes';
 import { DeleteFileDto, UploadedFileResponseDto, UPLOAD_RULES } from './dto/file.dto';
 import { AuditService } from '../audit/audit.service';
-import { AuditAction, AuditEntity } from '../common/enums';
+import { DataSource } from 'typeorm';
 
 @ApiTags('files')
 @ApiBearerAuth('access-token')
@@ -39,6 +38,7 @@ export class FilesController {
   constructor(
     private readonly storage: StorageService,
     private readonly audit: AuditService,
+    private readonly dataSource: DataSource,
   ) {}
 
   @Get('rules')
@@ -75,12 +75,15 @@ export class FilesController {
   async upload(
     @CurrentUser() user: JwtUser,
     @UploadedFile() file: UploadedFileLike | undefined,
-    @Query('bucket', new ParseEnumPipe(StorageBucket)) bucket: StorageBucket,
+    @Query('bucket') bucketQuery: string | undefined,
+    @Body('bucket') bucketBody: string | undefined,
     @Req() request: AuthenticatedRequest,
   ): Promise<UploadedFileResponseDto> {
     if (!file) {
       throw BusinessException.badRequest('Aucun fichier reçu.', ErrorCode.VALIDATION_ERROR);
     }
+
+    const bucket = resolveBucket(bucketQuery ?? bucketBody);
 
     // Réservation : les images produits sont réservées aux vendeurs approuvés.
     if (
@@ -131,11 +134,71 @@ export class FilesController {
   }
 
   @Get('presigned-url')
-  @ApiOperation({ summary: 'Obtenir une URL signée temporaire' })
+  @ApiOperation({
+    summary: 'Obtenir une URL temporaire pour un fichier privé',
+    description:
+      'Les espaces products et avatars sont publics. Les justificatifs vendeur et les preuves de paiement exigent la propriété du fichier (ou le rôle administrateur).',
+  })
   async presignedUrl(
-    @Query('bucket', new ParseEnumPipe(StorageBucket)) bucket: StorageBucket,
+    @Query('bucket') bucketQuery: string | undefined,
     @Query('objectKey') objectKey: string,
+    @CurrentUser() user: JwtUser,
   ): Promise<{ url: string }> {
-    return { url: await this.storage.getPresignedUrl(bucket, objectKey, 3600) };
+    if (!objectKey?.trim()) {
+      throw BusinessException.badRequest('objectKey requis.', ErrorCode.VALIDATION_ERROR);
+    }
+    const bucket = resolveBucket(bucketQuery);
+    const key = objectKey.trim();
+
+    if (bucket === StorageBucket.SELLER_DOCUMENTS || bucket === StorageBucket.PAYMENT_PROOFS) {
+      const owns = await this.ownsPrivateFile(user, bucket, key);
+      if (!owns) {
+        throw BusinessException.forbidden(
+          'Ce fichier ne vous appartient pas.',
+          ErrorCode.FORBIDDEN,
+        );
+      }
+    }
+
+    return { url: await this.storage.getPresignedUrl(bucket, key, 3600) };
   }
+
+  private async ownsPrivateFile(
+    user: JwtUser,
+    bucket: StorageBucket,
+    objectKey: string,
+  ): Promise<boolean> {
+    if (user.role === UserRole.ADMIN) {
+      return true;
+    }
+
+    if (bucket === StorageBucket.SELLER_DOCUMENTS) {
+      const rows = await this.dataSource.query<{ id: string }[]>(
+        'SELECT id FROM sellers WHERE user_id = $1 AND document_keys @> $2::jsonb LIMIT 1',
+        [user.id, JSON.stringify([objectKey])],
+      );
+      return rows.length > 0;
+    }
+
+    const rows = await this.dataSource.query<{ id: string }[]>(
+      `SELECT payment.id
+         FROM payments payment
+         INNER JOIN orders order_item ON order_item.id = payment.order_id
+        WHERE payment.proof_object_key = $1 AND order_item.user_id = $2
+        LIMIT 1`,
+      [objectKey, user.id],
+    );
+    return rows.length > 0;
+  }
+}
+
+function resolveBucket(value: string | undefined): StorageBucket {
+  const buckets = Object.values(StorageBucket) as string[];
+  if (!value || !buckets.includes(value)) {
+    throw BusinessException.badRequest(
+      `Bucket invalide. Valeurs acceptées : ${buckets.join(', ')}.`,
+      ErrorCode.VALIDATION_ERROR,
+    );
+  }
+  return value as StorageBucket;
 }

@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { INestApplication, Logger } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
@@ -9,6 +10,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { createAppValidationPipe } from './common/pipes/app-validation.pipe';
 import { StorageService } from './shared/storage/storage.service';
+import { isOriginAllowed } from './common/utils/origin.util';
 import { DataSource } from 'typeorm';
 
 async function bootstrap(): Promise<void> {
@@ -43,20 +45,33 @@ async function bootstrap(): Promise<void> {
   app.use(cookieParser());
 
   const origins = config.get<string[]>('security.corsOrigins') ?? ['http://localhost:5173'];
+  const allowLocalOrigins = config.get<string>('nodeEnv') !== 'production';
   app.enableCors({
     origin: (origin, callback) => {
-      // Autorise les clients sans origine (comme curl) et la liste .env.
-      if (!origin || origins.includes(origin) || origins.includes('*')) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error(`Origine non autorisée par CORS : ${origin}`));
+      callback(null, isOriginAllowed(origin, origins, allowLocalOrigins));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Requested-With'],
     exposedHeaders: ['X-Total-Count'],
   });
+
+  /* --------------------------- Fichiers statiques --------------------------- */
+
+  const storage = app.get(StorageService);
+  if (storage.driver === 'local') {
+    app.use(
+      storage.publicPrefix,
+      express.static(storage.localDir, {
+        index: false,
+        dotfiles: 'deny',
+        maxAge: '30d',
+        setHeaders: (res) => {
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+        },
+      }),
+    );
+  }
 
   /* ------------------------------ Préfixe API ------------------------------ */
 
@@ -87,7 +102,7 @@ async function bootstrap(): Promise<void> {
           next: () => void,
         ) => {
           const header = req.headers.authorization;
-          if (!header || !header.startsWith('Basic ')) {
+          if (!header?.startsWith('Basic ')) {
             res.setHeader('WWW-Authenticate', 'Basic realm="Swagger"');
             res.status(401).send('Authentification requise');
             return;
@@ -170,7 +185,6 @@ async function bootstrap(): Promise<void> {
 
   /* ------------------------------ Démarrage -------------------------------- */
 
-  const storage = app.get(StorageService);
   await storage.ensureBuckets().catch(() => undefined);
 
   await warnIfSchemaMissing(app);

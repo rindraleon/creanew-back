@@ -87,6 +87,14 @@ export class CreateProductDto {
   @IsUUID()
   categoryId!: string;
 
+  @ApiPropertyOptional({
+    description:
+      "UUID du vendeur propriétaire — exigé uniquement lorsqu'un administrateur crée le produit.",
+  })
+  @IsOptional()
+  @IsUUID()
+  sellerId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -265,6 +273,12 @@ export class ProductQueryDto {
   @IsString()
   @Length(1, 160)
   category?: string;
+
+  @ApiPropertyOptional({ description: 'Slug de collection.' })
+  @IsOptional()
+  @IsString()
+  @Length(1, 180)
+  collection?: string;
 
   @ApiPropertyOptional({ description: 'UUID du vendeur.' })
   @IsOptional()

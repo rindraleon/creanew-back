@@ -9,12 +9,18 @@ import { ErrorCode } from '../common/errors/error-codes';
 import { uniqueSlug, generateSku } from '../common/utils/slug.util';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction, AuditEntity, ProductStatus } from '../common/enums';
-import { ProductSort, type CreateProductDto, type UpdateProductDto } from './dto/product.dto';
+import {
+  ProductSort,
+  type CreateProductDto,
+  type UpdateProductDto,
+  ProductQueryDto,
+} from './dto/product.dto';
 import { CategoriesService } from '../categories/categories.service';
+import { CollectionsService } from '../collections/collections.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { StorageService } from '../shared/storage/storage.service';
 import type { Paginated } from '../common/interfaces/paginated.interface';
 import { buildMeta } from '../common/interfaces/paginated.interface';
-import type { ProductQueryDto } from './dto/product.dto';
 
 @Injectable()
 export class ProductsService {
@@ -28,7 +34,9 @@ export class ProductsService {
     private readonly dataSource: DataSource,
     private readonly audit: AuditService,
     private readonly categoriesService: CategoriesService,
+    private readonly collectionsService: CollectionsService,
     private readonly notifications: NotificationsService,
+    private readonly storage: StorageService,
   ) {}
 
   /* --------------------------------- Public --------------------------------- */
@@ -62,6 +70,16 @@ export class ProductsService {
     }
     if (query.category) {
       qb.andWhere('category.slug = :categorySlug', { categorySlug: query.category });
+    }
+    if (query.collection) {
+      const collection = await this.collectionsService.findPublishedBySlug(query.collection);
+      if (!collection || collection.productIds.length === 0) {
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('product.id IN (:...collectionProductIds)', {
+          collectionProductIds: collection.productIds,
+        });
+      }
     }
     if (query.seller) {
       qb.andWhere('product."seller_id" = :sellerId', { sellerId: query.seller });
@@ -113,6 +131,7 @@ export class ProductsService {
     dto: CreateProductDto,
     request?: Request,
   ): Promise<Product> {
+    await this.assertSellerExists(sellerId);
     await this.categoriesService.findById(dto.categoryId);
 
     const slug = await uniqueSlug(dto.slug ?? dto.name, async (candidate) => {
@@ -258,20 +277,46 @@ export class ProductsService {
 
   async replaceImages(
     productId: string,
-    images: { objectKey: string; url?: string; alt?: string; isPrimary?: boolean }[],
+    images: { objectKey: string; alt?: string; isPrimary?: boolean }[],
   ): Promise<ProductImage[]> {
+    const previous = await this.images.find({ where: { productId } });
     await this.images.delete({ productId });
+
+    const kept = new Set(images.map((image) => image.objectKey));
     const entities = images.map((image, index) =>
       this.images.create({
         productId,
         objectKey: image.objectKey,
-        url: image.url ?? null,
+        url: this.storage.urlForKey(image.objectKey),
         alt: image.alt ?? null,
         sortOrder: index,
         isPrimary: image.isPrimary ?? index === 0,
       }),
     );
-    return this.images.save(entities);
+    const saved = await this.images.save(entities);
+
+    await Promise.all(
+      previous
+        .filter((image) => !kept.has(image.objectKey))
+        .map((image) => this.storage.deleteByKey(image.objectKey)),
+    );
+
+    return saved;
+  }
+
+  async findForSeller(
+    id: string,
+    sellerId: string,
+    options: { isAdmin?: boolean } = {},
+  ): Promise<Product> {
+    const product = await this.findById(id);
+    if (!options.isAdmin && product.sellerId !== sellerId) {
+      throw BusinessException.forbidden(
+        "Vous n'êtes pas propriétaire de ce produit.",
+        ErrorCode.PRODUCT_NOT_OWNED,
+      );
+    }
+    return product;
   }
 
   /* ---------------------------------- Stock --------------------------------- */
@@ -284,24 +329,26 @@ export class ProductsService {
     const runner = manager as unknown as {
       query: (sql: string, params?: unknown[]) => Promise<unknown>;
     };
-    for (const item of items) {
-      const rows = (await runner.query(
-        'UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1 RETURNING stock',
-        [item.quantity, item.productId],
-      )) as { stock: number }[];
-      if (!rows || rows.length === 0) {
-        throw BusinessException.conflict(
-          'Stock insuffisant pour un ou plusieurs articles.',
-          ErrorCode.INSUFFICIENT_STOCK,
-        );
-      }
-      const remaining = rows[0].stock;
-      if (remaining <= 0) {
-        await runner.query("UPDATE products SET status = 'out_of_stock' WHERE id = $1", [
-          item.productId,
-        ]);
-      }
-    }
+    await Promise.all(
+      items.map(async (item) => {
+        const rows = (await runner.query(
+          'UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1 RETURNING stock',
+          [item.quantity, item.productId],
+        )) as { stock: number }[];
+        if (!rows || rows.length === 0) {
+          throw BusinessException.conflict(
+            'Stock insuffisant pour un ou plusieurs articles.',
+            ErrorCode.INSUFFICIENT_STOCK,
+          );
+        }
+        const remaining = rows[0].stock;
+        if (remaining <= 0) {
+          await runner.query("UPDATE products SET status = 'out_of_stock' WHERE id = $1", [
+            item.productId,
+          ]);
+        }
+      }),
+    );
   }
 
   async restock(productId: string, quantity: number): Promise<void> {
@@ -336,6 +383,16 @@ export class ProductsService {
   }
 
   /* -------------------------------- Interne --------------------------------- */
+
+  private async assertSellerExists(sellerId: string): Promise<void> {
+    const rows = await this.dataSource.query<{ id: string }[]>(
+      'SELECT id FROM sellers WHERE id = $1 AND deleted_at IS NULL LIMIT 1',
+      [sellerId],
+    );
+    if (!rows || rows.length === 0) {
+      throw BusinessException.notFound('Vendeur introuvable.', ErrorCode.NOT_FOUND);
+    }
+  }
 
   private baseQuery(): SelectQueryBuilder<Product> {
     return this.products

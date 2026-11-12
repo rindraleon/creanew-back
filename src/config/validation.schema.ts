@@ -36,6 +36,8 @@ export const validationSchema = Joi.object({
   JWT_REFRESH_TTL: Joi.string().default('30d'),
   JWT_REFRESH_COOKIE_NAME: Joi.string().default('creanew_rt'),
 
+  STORAGE_LOCAL_DIR: Joi.string().default('uploads'),
+  STORAGE_LOCAL_URL_PREFIX: Joi.string().default('/uploads'),
   THROTTLE_TTL: Joi.number().integer().default(60),
   THROTTLE_LIMIT: Joi.number().integer().default(30),
   CORS_ORIGINS: Joi.string().default('http://localhost:5173'),
@@ -58,10 +60,7 @@ export const validationSchema = Joi.object({
   MINIO_SECRET_KEY: Joi.string().allow('').default(''),
   MINIO_REGION: Joi.string().default('mg-central-1'),
   MINIO_PUBLIC_URL: Joi.string().default('http://localhost:9000'),
-  MINIO_BUCKET_PRODUCTS: Joi.string().default('products'),
-  MINIO_BUCKET_AVATARS: Joi.string().default('avatars'),
-  MINIO_BUCKET_SELLER_DOCUMENTS: Joi.string().default('seller-documents'),
-  MINIO_BUCKET_PAYMENT_PROOFS: Joi.string().default('payment-proofs'),
+  MINIO_BUCKET: Joi.string().default('mobilier-shop'),
   UPLOAD_MAX_FILE_SIZE: Joi.number()
     .integer()
     .default(5 * 1024 * 1024),

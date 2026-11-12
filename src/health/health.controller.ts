@@ -35,7 +35,7 @@ export class HealthController {
       services: {
         database,
         redis: redisUp ? 'up' : 'down',
-        storage: this.storage.getStatus().configured ? 'configured' : 'not-configured',
+        storage: this.storage.getStatus().driver,
       },
     };
   }

@@ -1,5 +1,3 @@
-import { StorageBucket } from '../common/enums';
-
 const toBoolean = (value: string | undefined, fallback = false): boolean => {
   if (value === undefined || value === '') return fallback;
   return value.toLowerCase() === 'true';
@@ -78,13 +76,9 @@ const configuration = () => ({
     secretKey: process.env.MINIO_SECRET_KEY ?? '',
     region: process.env.MINIO_REGION ?? 'mg-central-1',
     publicUrl: process.env.MINIO_PUBLIC_URL ?? 'http://localhost:9000',
-    buckets: {
-      [StorageBucket.PRODUCTS]: process.env.MINIO_BUCKET_PRODUCTS ?? 'products',
-      [StorageBucket.AVATARS]: process.env.MINIO_BUCKET_AVATARS ?? 'avatars',
-      [StorageBucket.SELLER_DOCUMENTS]:
-        process.env.MINIO_BUCKET_SELLER_DOCUMENTS ?? 'seller-documents',
-      [StorageBucket.PAYMENT_PROOFS]: process.env.MINIO_BUCKET_PAYMENT_PROOFS ?? 'payment-proofs',
-    } satisfies Record<StorageBucket, string>,
+    bucket: process.env.MINIO_BUCKET ?? 'mobilier-shop',
+    localDir: process.env.STORAGE_LOCAL_DIR ?? 'uploads',
+    localUrlPrefix: process.env.STORAGE_LOCAL_URL_PREFIX ?? '/uploads',
     maxFileSize: toNumber(process.env.UPLOAD_MAX_FILE_SIZE, 5 * 1024 * 1024),
     maxFiles: toNumber(process.env.UPLOAD_MAX_FILES, 10),
   },

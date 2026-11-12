@@ -4,12 +4,15 @@ import {
   DeleteDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 
 @Entity('categories')
 @Index('idx_categories_slug', ['slug'], { unique: true })
+@Index('idx_categories_parent', ['parentId'])
 export class Category {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -34,6 +37,13 @@ export class Category {
 
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive!: boolean;
+
+  @Column({ type: 'uuid', name: 'parent_id', nullable: true })
+  parentId!: string | null;
+
+  @ManyToOne(() => Category, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'parent_id' })
+  parent!: Category | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
