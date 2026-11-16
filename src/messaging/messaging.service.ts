@@ -61,6 +61,15 @@ export class MessagingService {
       .slice(0, 5000);
   }
 
+  private escapeHtml(v: string): string {
+    return v
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   private async ensureParticipant(conversationId: string, userId: string): Promise<void> {
     const count = await this.participants.count({ where: { conversationId, userId } });
     if (!count)
@@ -135,7 +144,13 @@ export class MessagingService {
     });
   }
 
-  async listForUser(userId: string, role: UserRole): Promise<ConversationSummary[]> {
+  async listForUser(
+    userId: string,
+    role: UserRole,
+    page: { limit: number; offset: number } = { limit: 50, offset: 0 },
+  ): Promise<ConversationSummary[]> {
+    const limit = Math.min(Math.max(page.limit || 50, 1), 100);
+    const offset = Math.max(page.offset || 0, 0);
     // L'utilisateur voit ses conversations où il est participant
     const rows = await this.dataSource.query<ConversationRow[]>(
       `SELECT c.*, 
@@ -144,8 +159,9 @@ export class MessagingService {
          (SELECT created_at FROM messages m2 WHERE m2.conversation_id=c.id ORDER BY m2.created_at DESC LIMIT 1) as last_at
        FROM conversations c
        JOIN conversation_participants cp ON cp.conversation_id=c.id AND cp.user_id=$1
-       ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC`,
-      [userId],
+       ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset],
     );
     // admin voit tout si souhaité, mais on garde filtrage participant pour sécurité — admin est ajouté à chaque conversation créée.
     // Pour couvrir legacy, admin peut voir tout:
@@ -177,7 +193,16 @@ export class MessagingService {
     }));
   }
 
-  async getMessages(conversationId: string, userId: string, role: UserRole): Promise<Message[]> {
+  async getMessages(
+    conversationId: string,
+    userId: string,
+    role: UserRole,
+    page: { limit: number; offset: number } = { limit: 200, offset: 0 },
+  ): Promise<Message[]> {
+    page = {
+      limit: Math.min(Math.max(page.limit || 200, 1), 500),
+      offset: Math.max(page.offset || 0, 0),
+    };
     if (role !== UserRole.ADMIN) await this.ensureParticipant(conversationId, userId);
     // also check convo exists
     const convo = await this.conversations.findOne({ where: { id: conversationId } });
@@ -185,6 +210,8 @@ export class MessagingService {
     return this.messages.find({
       where: { conversationId },
       order: { createdAt: 'ASC' },
+      take: page.limit,
+      skip: page.offset,
     });
   }
 
@@ -237,8 +264,8 @@ export class MessagingService {
         await this.mail
           .send({
             to: userRow[0].email,
-            subject: `Nouveau message — ${convo.subject}`,
-            html: `<p>Vous avez reçu un nouveau message dans la conversation <strong>${convo.subject}</strong>.</p><p>${body.replace(/\n/g, '<br>')}</p><p><a href="${this.config.get<string>('frontendUrl')}/messages/${conversationId}">Voir la conversation</a></p>`,
+            subject: `Nouveau message — ${convo.subject.slice(0, 80)}`,
+            html: `<p>Vous avez reçu un nouveau message dans la conversation <strong>${this.escapeHtml(convo.subject)}</strong>.</p><p>${this.escapeHtml(body).replace(/\n/g, '<br>')}</p><p><a href="${this.config.get<string>('frontendUrl')}/messages/${conversationId}">Voir la conversation</a></p>`,
           })
           .catch(() => {});
       }
@@ -247,8 +274,15 @@ export class MessagingService {
     return saved;
   }
 
-  async markRead(conversationId: string, userId: string, messageId?: string): Promise<void> {
-    await this.ensureParticipant(conversationId, userId);
+  async markRead(
+    conversationId: string,
+    userId: string,
+    messageId: string | undefined,
+    role: UserRole,
+  ): Promise<void> {
+    if (role !== UserRole.ADMIN) await this.ensureParticipant(conversationId, userId);
+    const convo = await this.conversations.findOne({ where: { id: conversationId } });
+    if (!convo) throw BusinessException.notFound('Conversation introuvable.', ErrorCode.NOT_FOUND);
     if (messageId) {
       await this.messages.update(
         { id: messageId, conversationId },

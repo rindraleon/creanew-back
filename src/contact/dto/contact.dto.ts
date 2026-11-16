@@ -4,7 +4,7 @@ import { IsSafeEmail, NormalizeEmail } from '../../common/validators/email-dispo
 import { ContactStatus } from '../entities/contact-message.entity';
 
 export class CreateContactDto {
-  @ApiProperty({ example: 'Rindra Léon' })
+  @ApiProperty({ example: 'Miora Rakoto' })
   @IsString()
   @Length(2, 160)
   name!: string;

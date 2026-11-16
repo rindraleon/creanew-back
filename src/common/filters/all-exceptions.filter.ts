@@ -25,18 +25,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     let message: string | string[] = 'Une erreur inattendue est survenue.';
     let code: ErrorCode = ErrorCode.INTERNAL_ERROR;
-    let errors: Record<string, string[]> | undefined;
 
     // Erreurs d'upload (fichier trop volumineux) : Nest encapsule l'erreur
     // multer dans une exception dont le message reste anglais.
     const uploadError = this.translateUploadError(exception);
     if (uploadError) {
-      this.respondWithTranslatedError(
-        response,
-        request,
-        uploadError,
-        HttpStatus.PAYLOAD_TOO_LARGE,
-      );
+      this.respondWithTranslatedError(response, request, uploadError, HttpStatus.PAYLOAD_TOO_LARGE);
       return;
     }
 
@@ -48,7 +42,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return;
     }
 
-    ({ message, code, errors } = this.getErrorDetails(exception, status));
+    const details = this.getErrorDetails(exception, status);
+    message = details.message;
+    code = details.code;
+    const errors = details.errors;
 
     // Les erreurs 500 ne doivent jamais exposer le message interne.
     message = this.logException(exception, request, status, code, message);
@@ -141,9 +138,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         `${request.method} ${request.path} → ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
-      return process.env.NODE_ENV === 'production'
-        ? 'Une erreur interne est survenue.'
-        : message;
+      return process.env.NODE_ENV === 'production' ? 'Une erreur interne est survenue.' : message;
     }
 
     this.logger.warn(

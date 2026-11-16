@@ -2,9 +2,11 @@
 -- CreaNew — schéma PostgreSQL complet
 -- ----------------------------------------------------------------------------
 -- Généré à partir du code source réel du projet (entités TypeORM) puis vérifié
--- contre la base effectivement produite par les 8 migrations présentes dans
--- src/database/migrations. Les noms de contraintes et d'index sont conservés
--- à l'identique, car les migrations les référencent explicitement.
+-- contre la base effectivement produite par les 9 migrations présentes dans
+-- src/database/migrations (dont 1790000000006-AddCollectionAudit). Les noms de
+-- contraintes et d'index sont conservés à l'identique, car les migrations les
+-- référencent explicitement. L'ordre des valeurs des enums suit l'ordre produit
+-- par les migrations (clauses BEFORE des migrations 0004/0006).
 --
 -- Tables : 28 dont 25 entités TypeORM + email_verification_tokens
 --          + initial_admin_state + migrations (infrastructure)
@@ -12,8 +14,8 @@
 -- Contraintes CHECK : 1 (initial_admin_state.singleton)
 -- Triggers : aucun (updated_at est maintenu par l'ORM @UpdateDateColumn)
 --
--- Ce script suppose une base vide et vide le schéma public. Il est exclusif
--- avec `npm run migration:run` : les deux créent les mêmes objets.
+-- Ce script suppose une base vierge (il ne supprime pas le schéma existant).
+-- Il est exclusif avec `npm run migration:run` : les deux créent les mêmes objets.
 -- ============================================================================
 
 BEGIN;
@@ -75,6 +77,10 @@ CREATE TYPE public.audit_logs_action_enum AS ENUM (
     'CATEGORY_CREATED',
     'CATEGORY_UPDATED',
     'CATEGORY_DELETED',
+    'COLLECTION_CREATED',
+    'COLLECTION_UPDATED',
+    'COLLECTION_DELETED',
+    'COLLECTION_PUBLISHED',
     'ORDER_CREATED',
     'ORDER_STATUS_UPDATED',
     'ORDER_CANCELLED',
@@ -99,7 +105,8 @@ CREATE TYPE public.audit_logs_entity_enum AS ENUM (
     'payment',
     'cart',
     'file',
-    'auth'
+    'auth',
+    'collection'
 );
 
 CREATE TYPE public.contact_messages_status_enum AS ENUM (

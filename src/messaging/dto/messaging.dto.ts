@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID, Length } from 'class-validator';
+import { IsInt, IsOptional, IsString, IsUUID, Length, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateConversationDto {
   @ApiProperty({ example: 'Question sur ma commande CN-2026-001' })
@@ -45,4 +46,38 @@ export class ConversationResponseDto {
   @ApiProperty() lastMessageAt!: Date | null;
   @ApiProperty() unreadCount!: number;
   @ApiPropertyOptional() lastMessage!: { body: string; createdAt: Date } | null;
+}
+
+export class ConversationQueryDto {
+  @ApiPropertyOptional({ default: 50, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
+  @ApiPropertyOptional({ default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  offset?: number;
+}
+
+export class MessageQueryDto {
+  @ApiPropertyOptional({ default: 200, maximum: 500 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  limit?: number;
+
+  @ApiPropertyOptional({ default: 0 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  offset?: number;
 }

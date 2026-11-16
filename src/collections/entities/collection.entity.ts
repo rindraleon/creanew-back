@@ -8,6 +8,12 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+export interface CollectionGalleryImage {
+  objectKey: string;
+  url?: string | null;
+  alt?: string | null;
+}
+
 @Entity('collections')
 @Index('idx_collections_slug', ['slug'], { unique: true })
 @Index('idx_collections_position', ['position'])
@@ -36,6 +42,10 @@ export class Collection {
   /** IDs des produits rattachés — relation souple via JSONB (évite table de jointure lourde). */
   @Column({ type: 'jsonb', name: 'product_ids', default: () => "'[]'::jsonb" })
   productIds!: string[];
+
+  /** Galerie éditoriale de la collection (même format que images produit). */
+  @Column({ type: 'jsonb', name: 'gallery', default: () => "'[]'::jsonb" })
+  gallery!: CollectionGalleryImage[];
 
   @Column({ type: 'integer', default: 0 })
   position!: number;

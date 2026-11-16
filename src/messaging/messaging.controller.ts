@@ -1,7 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { MessagingService } from './messaging.service';
-import { CreateConversationDto, SendMessageDto } from './dto/messaging.dto';
+import {
+  ConversationQueryDto,
+  CreateConversationDto,
+  MessageQueryDto,
+  SendMessageDto,
+} from './dto/messaging.dto';
 import { CurrentUser, type JwtUser } from '../common/decorators/current-user.decorator';
 import { UuidParamPipe } from '../common/pipes/uuid-param.pipe';
 
@@ -19,8 +24,11 @@ export class MessagingController {
 
   @Get()
   @ApiOperation({ summary: 'Lister mes conversations' })
-  async list(@CurrentUser() user: JwtUser) {
-    return this.messagingService.listForUser(user.id, user.role);
+  async list(@CurrentUser() user: JwtUser, @Query() query: ConversationQueryDto) {
+    return this.messagingService.listForUser(user.id, user.role, {
+      limit: query.limit ?? 50,
+      offset: query.offset ?? 0,
+    });
   }
 
   @Get(':id')
@@ -30,8 +38,15 @@ export class MessagingController {
 
   @Get(':id/messages')
   @ApiOperation({ summary: 'Historique des messages' })
-  async messages(@Param('id', UuidParamPipe) id: string, @CurrentUser() user: JwtUser) {
-    return this.messagingService.getMessages(id, user.id, user.role);
+  async messages(
+    @Param('id', UuidParamPipe) id: string,
+    @CurrentUser() user: JwtUser,
+    @Query() query: MessageQueryDto,
+  ) {
+    return this.messagingService.getMessages(id, user.id, user.role, {
+      limit: query.limit ?? 200,
+      offset: query.offset ?? 0,
+    });
   }
 
   @Post(':id/messages')
@@ -50,7 +65,7 @@ export class MessagingController {
     @CurrentUser() user: JwtUser,
     @Body() body?: { messageId?: string },
   ) {
-    await this.messagingService.markRead(id, user.id, body?.messageId);
+    await this.messagingService.markRead(id, user.id, body?.messageId, user.role);
     return { message: 'Marqué lu' };
   }
 

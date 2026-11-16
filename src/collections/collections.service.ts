@@ -57,6 +57,7 @@ export class CollectionsService {
       description: dto.description ?? null,
       coverImageUrl: dto.coverImageUrl ?? null,
       coverObjectKey: dto.coverObjectKey ?? null,
+      gallery: dto.gallery ?? [],
       productIds: dto.productIds ?? [],
       position: dto.position ?? 0,
       isPublished: dto.isPublished ?? true,
@@ -64,11 +65,11 @@ export class CollectionsService {
     const saved = await this.collections.save(col);
     await this.audit.log({
       userId: request?.user?.id ?? null,
-      action: AuditAction.CATEGORY_CREATED,
-      entity: AuditEntity.CATEGORY,
+      action: AuditAction.COLLECTION_CREATED,
+      entity: AuditEntity.COLLECTION,
       entityId: saved.id,
       request,
-      metadata: { entity: 'collection', name: saved.name },
+      metadata: { name: saved.name },
     });
     return saved;
   }
@@ -84,6 +85,7 @@ export class CollectionsService {
     if (dto.description !== undefined) col.description = dto.description;
     if (dto.coverImageUrl !== undefined) col.coverImageUrl = dto.coverImageUrl;
     if (dto.coverObjectKey !== undefined) col.coverObjectKey = dto.coverObjectKey;
+    if (dto.gallery !== undefined) col.gallery = dto.gallery;
     if (dto.productIds !== undefined) col.productIds = dto.productIds;
     if (dto.position !== undefined) col.position = dto.position;
     if (dto.isPublished !== undefined) col.isPublished = dto.isPublished;
@@ -101,11 +103,11 @@ export class CollectionsService {
     const saved = await this.collections.save(col);
     await this.audit.log({
       userId: request?.user?.id ?? null,
-      action: AuditAction.CATEGORY_UPDATED,
-      entity: AuditEntity.CATEGORY,
+      action: AuditAction.COLLECTION_UPDATED,
+      entity: AuditEntity.COLLECTION,
       entityId: saved.id,
       request,
-      metadata: { entity: 'collection', fields: Object.keys(dto) },
+      metadata: { fields: Object.keys(dto) },
     });
     return saved;
   }
@@ -115,22 +117,29 @@ export class CollectionsService {
     await this.collections.softDelete(id);
     await this.audit.log({
       userId: request?.user?.id ?? null,
-      action: AuditAction.CATEGORY_DELETED,
-      entity: AuditEntity.CATEGORY,
+      action: AuditAction.COLLECTION_DELETED,
+      entity: AuditEntity.COLLECTION,
       entityId: id,
       request,
-      metadata: { entity: 'collection' },
     });
   }
 
   async setPublish(
     id: string,
     isPublished: boolean,
-    _request?: AuthenticatedRequest,
+    request?: AuthenticatedRequest,
   ): Promise<Collection> {
     const col = await this.findById(id);
     col.isPublished = isPublished;
     const saved = await this.collections.save(col);
+    await this.audit.log({
+      userId: request?.user?.id ?? null,
+      action: AuditAction.COLLECTION_PUBLISHED,
+      entity: AuditEntity.COLLECTION,
+      entityId: saved.id,
+      request,
+      metadata: { isPublished },
+    });
     return saved;
   }
 }
